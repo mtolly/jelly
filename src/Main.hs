@@ -3,12 +3,16 @@ module Main where
 
 import qualified Graphics.UI.SDL as SDL
 import qualified Graphics.UI.SDL.Image as Image
-import Foreign
+import Foreign hiding (void)
 import Foreign.C
 import Control.Monad (unless)
 import Control.Monad.Fix (fix)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO)
 import System.FilePath ((</>))
+import qualified Sound.OpenAL as AL
+import qualified Sound.File.Sndfile as Snd
+import Data.Conduit
+import Data.Functor (void)
 
 import Jammit
 import Audio
@@ -38,9 +42,27 @@ main = do
   putStrLn $ "Track: " ++ show (trackTitle trk)
   Right tex <- Image.imgLoadTexture rend img
 
+  Just dev <- AL.openDevice Nothing
+  Just ctxt <- AL.createContext dev []
+  AL.currentContext AL.$= Just ctxt
+  hnd <- Snd.openFile audio Snd.ReadMode Snd.defaultInfo
+  srcs@[srcL, srcR] <- AL.genObjectNames 2
+  AL.sourcePosition srcL AL.$= AL.Vertex3 (-1) 0 0
+  AL.sourcePosition srcR AL.$= AL.Vertex3 1    0 0
+  let sink = void $ sequenceSinks
+        [ mapInput (!! 0) (const Nothing) $ supply srcL 5
+        , mapInput (!! 1) (const Nothing) $ supply srcR 5
+        ]
+      isFull = do
+        lens <- mapM (AL.get . AL.buffersQueued) srcs
+        return $ all (>= 4) lens
+  _tid <- forkIO $ load hnd 1000 $$ stretch 44100 2 0.8 1 =$= sink
+  fix $ \loop -> isFull >>= \b -> unless b loop
+  AL.play srcs
+
+  zero $ SDL.renderCopy rend tex nullPtr nullPtr
+  SDL.renderPresent rend
   fix $ \loop -> do
-    zero $ SDL.renderCopy rend tex nullPtr nullPtr
-    SDL.renderPresent rend
     pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
         SDL.destroyWindow window

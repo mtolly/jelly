@@ -8,7 +8,7 @@ executable jelly
   main-is: Main.hs
   other-modules:
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options: -Wall -threaded
   build-depends:
     base
     , sdl2 >= 1.3.0 && < 1.4

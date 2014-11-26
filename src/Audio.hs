@@ -5,7 +5,10 @@ import qualified Sound.OpenAL as AL
 import qualified Sound.RubberBand as RB
 import Data.Conduit
 import qualified Data.Vector.Storable as V
+import Foreign.Storable (sizeOf)
+import Data.Int (Int16)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad (when)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay)
 import qualified Sound.File.Sndfile as Snd
@@ -39,3 +42,30 @@ stretch a b c d = do
         Nothing    -> return ()
         Just block -> liftIO (RB.process s block False) >> loop -- always False?
     Just n -> liftIO (RB.retrieve s n) >>= yield >> loop
+
+convertAudio :: V.Vector Float -> V.Vector Int16
+convertAudio = V.map $ \f -> round $ f * fromIntegral (maxBound :: Int16)
+
+supply :: AL.Source -> Int -> Sink (V.Vector Float) IO ()
+supply src n = fix $ \loop -> do
+  -- First, check if old buffers need to be removed
+  pr <- liftIO $ AL.get $ AL.buffersProcessed src
+  when (pr /= 0) $ liftIO $ AL.unqueueBuffers src pr >>= AL.deleteObjectNames
+  -- Then, check if we need to add new buffers
+  qu <- liftIO $ fmap fromIntegral $ AL.get $ AL.buffersQueued src
+  if qu >= n
+    then liftIO (threadDelay 100) >> loop
+    else await >>= \case
+      -- If there are still queued buffers but no more input,
+      -- we must loop more to dequeue the remaining buffers.
+      Nothing -> when (qu /= 0) $ liftIO (threadDelay 100) >> loop
+      Just vf -> do
+        let v = convertAudio vf
+        liftIO $ do
+          buf <- liftIO $ AL.genObjectName
+          V.unsafeWith v $ \p -> do
+            let mem = AL.MemoryRegion p $ fromIntegral vsize
+                vsize = V.length v * sizeOf (v V.! 0)
+            AL.bufferData buf AL.$= AL.BufferData mem AL.Mono16 44100
+          AL.queueBuffers src [buf]
+        loop
