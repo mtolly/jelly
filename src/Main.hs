@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PatternSynonyms #-}
 module Main where
 
 import qualified Graphics.UI.SDL as SDL
@@ -13,12 +14,17 @@ import qualified Sound.OpenAL as AL
 import qualified Sound.File.Sndfile as Snd
 import Data.Conduit
 import Data.Functor (void)
+import System.Environment (getArgs, getProgName)
 
 import Jammit
 import Audio
 
 main :: IO ()
 main = do
+  song <- getArgs >>= \case
+    [song] -> return song
+    _      -> getProgName >>= \pn -> error $ "Usage: "++pn++" song-folder"
+
   zero $ SDL.init $ SDL.SDL_INIT_TIMER .|. SDL.SDL_INIT_VIDEO
   Image.imgInit [Image.InitPNG]
 
@@ -27,12 +33,11 @@ main = do
       str -- title
       SDL.SDL_WINDOWPOS_UNDEFINED -- x
       SDL.SDL_WINDOWPOS_UNDEFINED -- y
-      640 -- width
+      724 -- width
       480 -- height
       SDL.SDL_WINDOW_RESIZABLE -- flags
   rend <- notNull $ SDL.createRenderer window (-1) SDL.SDL_RENDERER_ACCELERATED
 
-  let song = "jammit/0F9BABA8-84AA-4E06-B5DE-D88AD05FB659/"
   Just info <- loadInfo song
   Just trks <- loadTracks song
   putStrLn $ "Title: " ++ title info
@@ -56,19 +61,30 @@ main = do
       isFull = do
         lens <- mapM (AL.get . AL.buffersQueued) srcs
         return $ all (>= 4) lens
-  _tid <- forkIO $ load hnd 1000 $$ stretch 44100 2 0.8 1 =$= sink
+  _tid <- forkIO $ load hnd 1000 $$ stretch 44100 2 1.2 1 =$= sink
   fix $ \loop -> isFull >>= \b -> unless b loop
   AL.play srcs
 
-  zero $ SDL.renderCopy rend tex nullPtr nullPtr
-  SDL.renderPresent rend
+  let draw = do
+        zero $ SDL.renderCopy rend tex nullPtr nullPtr
+        SDL.renderPresent rend
+  draw
   fix $ \loop -> do
     pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
         SDL.destroyWindow window
         Image.imgQuit
         SDL.quit
-      _ -> threadDelay 1000 >> loop
+      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_SIZE_CHANGED }) -> do
+        -- Let user adjust height, but reset width to 724
+        height <- alloca $ \pw -> alloca $ \ph -> do
+          SDL.getWindowSize window pw ph
+          peek ph
+        SDL.setWindowSize window 724 height
+        draw
+        loop
+      Just _ -> loop
+      Nothing -> threadDelay 1000 >> loop
 
 notNull :: IO (Ptr a) -> IO (Ptr a)
 notNull act = do
