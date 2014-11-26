@@ -1,17 +1,21 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 module Main where
 
-import BasicPrelude
 import qualified Graphics.UI.SDL as SDL
+import qualified Graphics.UI.SDL.Image as Image
 import Foreign
 import Foreign.C
+import Control.Monad (unless)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay)
+import Jammit
+import System.FilePath ((</>))
 
 main :: IO ()
 main = do
   zero $ SDL.init $ SDL.SDL_INIT_TIMER .|. SDL.SDL_INIT_VIDEO
+  Image.imgInit [Image.InitPNG]
+
   window <- withCString "Jelly" $ \str ->
     notNull $ SDL.createWindow
       str -- title
@@ -19,12 +23,25 @@ main = do
       SDL.SDL_WINDOWPOS_UNDEFINED -- y
       640 -- width
       480 -- height
-      0 -- flags
-  _rend <- notNull $ SDL.createRenderer window (-1) SDL.SDL_RENDERER_ACCELERATED
+      SDL.SDL_WINDOW_RESIZABLE -- flags
+  rend <- notNull $ SDL.createRenderer window (-1) SDL.SDL_RENDERER_ACCELERATED
+
+  let song = "jammit/0F9BABA8-84AA-4E06-B5DE-D88AD05FB659/"
+  Just info <- loadInfo song
+  Just trks <- loadTracks song
+  putStrLn $ "Title: " ++ title info
+  let trk = head trks
+      img = song </> identifier trk ++ "_jcfn_00"
+  putStrLn $ "Track: " ++ show (trackTitle trk)
+  Right tex <- Image.imgLoadTexture rend img
+
   fix $ \loop -> do
+    zero $ SDL.renderCopy rend tex nullPtr nullPtr
+    SDL.renderPresent rend
     pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
         SDL.destroyWindow window
+        Image.imgQuit
         SDL.quit
       _ -> threadDelay 1000 >> loop
 
