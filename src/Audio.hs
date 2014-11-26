@@ -11,16 +11,11 @@ import Control.Concurrent (threadDelay)
 import qualified Sound.File.Sndfile as Snd
 import qualified Sound.File.Sndfile.Buffer.Vector as SndV
 
--- TODO: implementation that doesn't suck
 deinterleave :: (V.Storable a) => Int -> V.Vector a -> [V.Vector a]
-deinterleave n v = let
-  frames = splitInto n $ V.toList v
-  splitInto len xs = case splitAt len xs of
-    ([], _) -> []
-    (a , b) -> a : splitInto len b
-  in do
-    i <- [0 .. n - 1]
-    return $ V.fromList $ map (!! i) frames
+deinterleave n v = do
+  let len = V.length v `div` n
+  i <- [0 .. n - 1]
+  return $ V.generate len $ \j -> v V.! ((n * j) + i)
 
 load :: Snd.Handle -> Snd.Count -> Source IO [V.Vector Float]
 load h c = let
