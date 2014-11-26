@@ -8,8 +8,10 @@ import Foreign.C
 import Control.Monad (unless)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay)
-import Jammit
 import System.FilePath ((</>))
+
+import Jammit
+import Audio
 
 main :: IO ()
 main = do
@@ -32,6 +34,7 @@ main = do
   putStrLn $ "Title: " ++ title info
   let trk = head trks
       img = song </> identifier trk ++ "_jcfn_00"
+      audio = song </> identifier trk ++ "_jcfx"
   putStrLn $ "Track: " ++ show (trackTitle trk)
   Right tex <- Image.imgLoadTexture rend img
 

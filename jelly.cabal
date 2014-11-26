@@ -17,3 +17,10 @@ executable jelly
     , directory
     , filepath
     , property-list
+    , OpenAL
+    , hsndfile
+    , hsndfile-vector
+    , vector
+    , rubberband
+    , conduit
+    , transformers
