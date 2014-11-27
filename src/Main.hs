@@ -6,7 +6,7 @@ import qualified Graphics.UI.SDL as SDL
 import qualified Graphics.UI.SDL.Image as Image
 import Foreign hiding (void)
 import Foreign.C
-import Control.Monad (unless)
+import Control.Monad (unless, forM, forM_)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay, forkIO)
 import System.FilePath ((</>))
@@ -41,27 +41,26 @@ main = do
   Just info <- loadInfo song
   Just trks <- loadTracks song
   putStrLn $ "Title: " ++ title info
-  let trk = head trks
-      img = song </> identifier trk ++ "_jcfn_00"
-      audio = song </> identifier trk ++ "_jcfx"
-  putStrLn $ "Track: " ++ show (trackTitle trk)
+  let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
+      img      = song </> identifier (head fileTrks) ++ "_jcfn_00"
+      audio    = map (\t -> song </> identifier t ++ "_jcfx") fileTrks
+  putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
   Right tex <- Image.imgLoadTexture rend img
 
   Just dev <- AL.openDevice Nothing
   Just ctxt <- AL.createContext dev []
   AL.currentContext AL.$= Just ctxt
-  hnd <- Snd.openFile audio Snd.ReadMode Snd.defaultInfo
-  srcs@[srcL, srcR] <- AL.genObjectNames 2
-  AL.sourcePosition srcL AL.$= AL.Vertex3 (-1) 0 0
-  AL.sourcePosition srcR AL.$= AL.Vertex3 1    0 0
-  let sink = void $ sequenceSinks
-        [ mapInput (!! 0) (const Nothing) $ supply srcL 5
-        , mapInput (!! 1) (const Nothing) $ supply srcR 5
-        ]
-      isFull = do
-        lens <- mapM (AL.get . AL.buffersQueued) srcs
-        return $ all (>= 4) lens
-  _tid <- forkIO $ load hnd 1000 $$ stretch 44100 2 1.2 1 =$= sink
+  hnds <- forM audio $ \a ->
+    Snd.openFile a Snd.ReadMode Snd.defaultInfo
+  srcs <- AL.genObjectNames $ length hnds * 2
+  forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
+    AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
+  let source = mapOutput concat $ sequenceSources $ map (`load` 1000) hnds
+      sink = void $ sequenceSinks $ do
+        (i, src) <- zip [0..] srcs
+        return $ mapInput (!! i) (const Nothing) $ supply src 5
+      isFull = fmap (all (>= 4)) $ mapM (AL.get . AL.buffersQueued) srcs
+  _tid <- forkIO $ source $$ stretch 44100 (length srcs) 1.2 1 =$= sink
   fix $ \loop -> isFull >>= \b -> unless b loop
   AL.play srcs
 
