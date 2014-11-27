@@ -83,7 +83,7 @@ main = do
         SDL.destroyWindow window
         Image.imgQuit
         SDL.quit
-      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_SIZE_CHANGED }) -> do
+      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
         -- Let user adjust height, but reset width to sheetWidth
         height <- alloca $ \pw -> alloca $ \ph -> do
           SDL.getWindowSize window pw ph
