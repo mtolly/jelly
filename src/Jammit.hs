@@ -21,6 +21,7 @@ module Jammit
 , loadGhost
 , Section(..)
 , loadSections
+, findNotation, findTab, findAudio
 ) where
 
 import Control.Applicative ((<$>), (<*>), liftA2)
@@ -312,3 +313,25 @@ instance PL.PropertyListItem Section where
 loadSections :: FilePath -> IO (Maybe [Section])
 loadSections dir = PL.listFromPropertyList <$>
   readXmlPropertyListFromFile' (dir </> "sections.plist")
+
+findImages :: String -> Track -> FilePath -> IO [FilePath]
+findImages suffix trk dir = do
+  files <- Dir.getDirectoryContents dir
+  let image i = identifier trk ++ "_" ++ suffix ++ "_" ++ showTwo i
+      showTwo i = if i < 10 then '0' : show i else show i
+  return
+    [ dir </> file
+    | file <- map image ([0..99] :: [Int])
+    , file `elem` files
+    ]
+
+findNotation, findTab :: Track -> FilePath -> IO [FilePath]
+findNotation = findImages "jcfn"
+findTab      = findImages "jcft"
+
+findAudio :: Track -> FilePath -> IO (Maybe FilePath)
+findAudio trk dir = let
+  file = dir </> identifier trk ++ "_jcfx"
+  in do
+    b <- Dir.doesFileExist file
+    return $ guard b >> Just file

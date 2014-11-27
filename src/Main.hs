@@ -9,12 +9,12 @@ import Foreign.C
 import Control.Monad (unless, forM, forM_)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay, forkIO)
-import System.FilePath ((</>))
 import qualified Sound.OpenAL as AL
 import qualified Sound.File.Sndfile as Snd
 import Data.Conduit
 import Data.Functor (void)
 import System.Environment (getArgs, getProgName)
+import Data.Maybe (catMaybes)
 
 import Jammit
 import Audio
@@ -42,8 +42,8 @@ main = do
   Just trks <- loadTracks song
   putStrLn $ "Title: " ++ title info
   let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
-      img      = song </> identifier (head fileTrks) ++ "_jcfn_00"
-      audio    = map (\t -> song </> identifier t ++ "_jcfx") fileTrks
+  img <- fmap head $ findNotation (head fileTrks) song
+  audio <- fmap catMaybes $ mapM (`findAudio` song) fileTrks
   putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
   Right tex <- Image.imgLoadTexture rend img
 
