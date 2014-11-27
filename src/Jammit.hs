@@ -22,6 +22,7 @@ module Jammit
 , Section(..)
 , loadSections
 , findNotation, findTab, findAudio
+, sheetWidth, sheetHeight
 ) where
 
 import Control.Applicative ((<$>), (<*>), liftA2)
@@ -335,3 +336,7 @@ findAudio trk dir = let
   in do
     b <- Dir.doesFileExist file
     return $ guard b >> Just file
+
+sheetWidth, sheetHeight :: (Integral a) => a
+sheetWidth  = 724
+sheetHeight = 1024
