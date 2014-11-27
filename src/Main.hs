@@ -76,10 +76,9 @@ main = do
         zero $ SDL.renderClear rend
         renderRow rend (rows !! rowN) (0, 0)
         SDL.renderPresent rend
-  draw
-  fix $ \loop -> do
+  fixFrames 16 $ \loop -> do
     draw
-    pollEvent >>= \case
+    fix $ \eloop -> pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
         SDL.destroyWindow window
         Image.imgQuit
@@ -90,10 +89,22 @@ main = do
           SDL.getWindowSize window pw ph
           peek ph
         SDL.setWindowSize window sheetWidth height
-        draw
-        loop
-      Just _ -> loop
-      Nothing -> threadDelay 1000 >> loop
+        eloop
+      Just _ -> eloop
+      Nothing -> loop
+
+-- | Like using "fix" to create a loop, except we start 2 iterations of the loop
+-- no faster than the given number of milliseconds apart.
+fixFrames :: Word32 -> (IO a -> IO a) -> IO a
+fixFrames frameTime loop = go where
+  go = do
+    start <- SDL.getTicks
+    loop $ do
+      end <- SDL.getTicks
+      let micro :: Int
+          micro = fromIntegral frameTime - (fromIntegral end - fromIntegral start)
+      threadDelay $ max 0 micro * 1000
+      go
 
 notNull :: IO (Ptr a) -> IO (Ptr a)
 notNull act = do
