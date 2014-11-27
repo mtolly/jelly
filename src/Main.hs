@@ -8,7 +8,7 @@ import Foreign hiding (void)
 import Foreign.C
 import Control.Monad (unless, forM, forM_)
 import Control.Monad.Fix (fix)
-import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent (threadDelay, forkIO, killThread)
 import qualified Sound.OpenAL as AL
 import qualified Sound.File.Sndfile as Snd
 import Data.Conduit
@@ -65,7 +65,7 @@ main = do
         return $ mapInput (!! i) (const Nothing) $ supply src 5
       isFull = fmap (all (>= 4)) $ mapM (AL.get . AL.buffersQueued) srcs
       stretchTime = 1.2
-  _tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
+  tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
   fix $ \loop -> isFull >>= \b -> unless b loop
   start <- SDL.getTicks
   AL.play srcs
@@ -80,6 +80,10 @@ main = do
     draw
     fix $ \eloop -> pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
+        killThread tid
+        AL.currentContext AL.$= Nothing
+        AL.destroyContext ctxt
+        True <- AL.closeDevice dev
         SDL.destroyWindow window
         Image.imgQuit
         SDL.quit
