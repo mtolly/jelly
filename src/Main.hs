@@ -41,6 +41,7 @@ main = do
   Just info <- loadInfo song
   Just trks <- loadTracks song
   let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
+  Just bts <- loadBeats song
 
   imgs <- findNotation (head fileTrks) song
   Right texs <- fmap sequence $ mapM (Image.imgLoadTexture rend) imgs
@@ -63,16 +64,21 @@ main = do
         (i, src) <- zip [0..] srcs
         return $ mapInput (!! i) (const Nothing) $ supply src 5
       isFull = fmap (all (>= 4)) $ mapM (AL.get . AL.buffersQueued) srcs
-  _tid <- forkIO $ source $$ stretch 44100 (length srcs) 1.2 1 =$= sink
+      stretchTime = 1.2
+  _tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
   fix $ \loop -> isFull >>= \b -> unless b loop
+  start <- SDL.getTicks
   AL.play srcs
 
   let draw = do
+        now <- SDL.getTicks
+        let rowN = rowNumber ((fromIntegral (now - start) / 1000) / stretchTime) bts
         zero $ SDL.renderClear rend
-        renderRow rend (head rows) (0, 0)
+        renderRow rend (rows !! rowN) (0, 0)
         SDL.renderPresent rend
   draw
   fix $ \loop -> do
+    draw
     pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> do
         SDL.destroyWindow window
@@ -130,3 +136,8 @@ splitRows trk = go 0 where
           nextHeight = height - SDL.rectH thisRect
           nextRect = SDL.Rect 0 0 sheetWidth nextHeight
           in [(t, thisRect), (t', nextRect)] : go nextHeight tt
+
+rowNumber :: Double -> [Beat] -> Int
+rowNumber pos bts = let
+  downs = map position $ filter isDownbeat bts
+  in div (max 0 $ length (takeWhile (< pos) downs) - 2) 2
