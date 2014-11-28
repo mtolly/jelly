@@ -56,20 +56,21 @@ main = do
         sink = void $ sequenceSinks $ do
           (i, src) <- zip [0..] srcs
           return $ mapInput (!! i) (const Nothing) $ supply src 5
-        stretchTime = 1.2
-        pipeline = source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
+        pipeline speed = source $$ stretch 44100 (length srcs) speed 1 =$= sink
         isFull = all (>= 4) <$> mapM (AL.get . AL.buffersQueued) srcs
 
     audioPosn   <- newIORef 0       -- seconds
     startedAt   <- newIORef Nothing -- sdl ticks
     audioThread <- newIORef Nothing -- thread id
+    playSpeed   <- newIORef 1       -- ratio of playback secs to original secs
     let start = do
           -- Seek all the audio handles to our saved position
           pn <- readIORef audioPosn
           forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek
             $ round $ pn * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
           -- Start the audio conduit, and wait for it to fill the queues
-          forkIO pipeline >>= writeIORef audioThread . Just
+          speed <- readIORef playSpeed
+          forkIO (pipeline speed) >>= writeIORef audioThread . Just
           fix $ \loop -> isFull >>= \full -> unless full loop
           -- Mark the sdl ticks when we started audio
           SDL.getTicks >>= writeIORef startedAt . Just
@@ -82,7 +83,8 @@ main = do
             writeIORef startedAt Nothing
             tend <- SDL.getTicks
             let diffSeconds = fromIntegral (tend - tstart) / 1000
-            modifyIORef audioPosn (+ diffSeconds / stretchTime)
+            speed <- readIORef playSpeed
+            modifyIORef audioPosn (+ diffSeconds / speed)
             -- Stop audio, clear queues and delete buffers
             AL.rewind srcs
             forM_ srcs $ \src
@@ -98,7 +100,8 @@ main = do
             Just tstart -> do
               tend <- SDL.getTicks
               let diffSeconds = fromIntegral (tend - tstart) / 1000
-              (+ diffSeconds / stretchTime) <$> readIORef audioPosn
+              speed <- readIORef playSpeed
+              (+ diffSeconds / speed) <$> readIORef audioPosn
           let rowN = rowNumber bts pn
           zero $ SDL.renderClear rend
           renderRow rend (rows !! rowN) (0, 0)
@@ -106,7 +109,6 @@ main = do
         pauseThenDo act = readIORef startedAt >>= \case
           Nothing -> act
           Just _  -> stop >> act >> threadDelay 100000 >> start
-    start
     fixFrames 16 $ \loop -> do
       draw
       fix $ \eloop -> pollEvent >>= \case
@@ -126,6 +128,11 @@ main = do
           eloop
         Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> do
           pauseThenDo $ modifyIORef audioPosn (+ 5)
+          eloop
+        Just (KeyPress SDL.SDL_SCANCODE_S) -> do
+          pauseThenDo $ modifyIORef playSpeed $ \case
+            1 -> 1.25
+            _ -> 1
           eloop
         Just _ -> eloop
         Nothing -> loop
