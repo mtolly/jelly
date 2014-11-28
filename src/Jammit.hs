@@ -204,19 +204,19 @@ data Track = Track
 instance PL.PropertyListItem Track where
 
   toPropertyList t = PL.plDict $ Map.fromList $ catMaybes
-    [ Just ("class"              , PL.plString $ trackClass          t)
-    , Just ("identifier"         , PL.plString $ identifier          t)
+    [ Just   ("class"              , PL.plString $ trackClass          t)
+    , Just   ("identifier"         , PL.plString $ identifier          t)
     , (\i -> ("scoreSystemHeight"  , PL.plInt    i)) <$> scoreSystemHeight   t
     , (\i -> ("scoreSystemInterval", PL.plInt    i)) <$> scoreSystemInterval t
     , (\s -> ("title"              , PL.plString s)) <$> trackTitle          t
     ]
 
   fromPropertyList pl = PL.fromPlDict pl >>= \d -> Track
-    <$>      (Map.lookup "class"               d >>= PL.fromPlString)
-    <*>      (Map.lookup "identifier"          d >>= PL.fromPlString)
-    <*> Just (Map.lookup "scoreSystemHeight"   d >>= PL.fromPlInt   )
-    <*> Just (Map.lookup "scoreSystemInterval" d >>= PL.fromPlInt   )
-    <*> Just (Map.lookup "title"               d >>= PL.fromPlString)
+    <$> do        Map.lookup "class"               d >>= PL.fromPlString
+    <*> do        Map.lookup "identifier"          d >>= PL.fromPlString
+    <*> do Just $ Map.lookup "scoreSystemHeight"   d >>= PL.fromPlInt
+    <*> do Just $ Map.lookup "scoreSystemInterval" d >>= PL.fromPlInt
+    <*> do Just $ Map.lookup "title"               d >>= PL.fromPlString
 
 loadTracks :: FilePath -> IO (Maybe [Track])
 loadTracks dir = PL.listFromPropertyList <$>
@@ -277,12 +277,9 @@ instance PL.PropertyListItem Beat where
     ]
 
   fromPropertyList pl = PL.fromPlDict pl >>= \d -> Beat
-    <$> do
-      maybe (Just False) PL.fromPlBool $ Map.lookup "isDownbeat" d
-    <*> do
-      maybe (Just False) PL.fromPlBool $ Map.lookup "isGhostBeat" d
-    <*> do
-      Map.lookup "position" d >>= PL.fromPlReal
+    <$> do maybe (Just False) PL.fromPlBool $ Map.lookup "isDownbeat" d
+    <*> do maybe (Just False) PL.fromPlBool $ Map.lookup "isGhostBeat" d
+    <*> do Map.lookup "position" d >>= PL.fromPlReal
 
 loadBeats :: FilePath -> IO (Maybe [Beat])
 loadBeats dir = PL.listFromPropertyList <$>
@@ -307,9 +304,9 @@ instance PL.PropertyListItem Section where
     ]
 
   fromPropertyList pl = PL.fromPlDict pl >>= \d -> Section
-    <$> (Map.lookup "beat"   d >>= PL.fromPlInt)
-    <*> (Map.lookup "number" d >>= PL.fromPlInt)
-    <*> (Map.lookup "type"   d >>= PL.fromPlInt)
+    <$> do Map.lookup "beat"   d >>= PL.fromPlInt
+    <*> do Map.lookup "number" d >>= PL.fromPlInt
+    <*> do Map.lookup "type"   d >>= PL.fromPlInt
 
 loadSections :: FilePath -> IO (Maybe [Section])
 loadSections dir = PL.listFromPropertyList <$>
