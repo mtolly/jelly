@@ -17,6 +17,7 @@ import Data.Functor (void)
 import System.Environment (getArgs, getProgName)
 import Data.Maybe (catMaybes)
 import Control.Applicative ((<$>))
+import Data.IORef
 
 import Jammit
 import Audio
@@ -55,23 +56,58 @@ main = do
         sink = void $ sequenceSinks $ do
           (i, src) <- zip [0..] srcs
           return $ mapInput (!! i) (const Nothing) $ supply src 5
-        isFull = all (>= 4) <$> mapM (AL.get . AL.buffersQueued) srcs
         stretchTime = 1.2
-    tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
-    fix $ \loop -> isFull >>= \b -> unless b loop
-    start <- SDL.getTicks
-    AL.play srcs
+        pipeline = source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
+        isFull = all (>= 4) <$> mapM (AL.get . AL.buffersQueued) srcs
 
-    let draw = do
-          now <- SDL.getTicks
-          let rowN = rowNumber bts $ (fromIntegral (now - start) / 1000) / stretchTime
+    audioPosn   <- newIORef 0       -- seconds
+    startedAt   <- newIORef Nothing -- sdl ticks
+    audioThread <- newIORef Nothing -- thread id
+    let start = do
+          -- Seek all the audio handles to our saved position
+          pn <- readIORef audioPosn
+          forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek
+            $ round $ pn * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
+          -- Start the audio conduit, and wait for it to fill the queues
+          forkIO pipeline >>= writeIORef audioThread . Just
+          fix $ \loop -> isFull >>= \full -> unless full loop
+          -- Mark the sdl ticks when we started audio
+          SDL.getTicks >>= writeIORef startedAt . Just
+          -- Start audio playback
+          AL.play srcs
+        stop = readIORef startedAt >>= \case
+          Nothing -> return ()
+          Just tstart -> do
+            -- Update the audio position
+            writeIORef startedAt Nothing
+            tend <- SDL.getTicks
+            let diffSeconds = fromIntegral (tend - tstart) / 1000
+            modifyIORef audioPosn (+ diffSeconds / stretchTime)
+            -- Stop audio, clear queues and delete buffers
+            AL.rewind srcs
+            forM_ srcs $ \src
+              ->  AL.get (AL.buffersProcessed src)
+              >>= AL.unqueueBuffers src
+              >>= AL.deleteObjectNames
+            -- Kill the audio thread
+            readIORef audioThread >>= maybe (return ()) killThread
+            writeIORef audioThread Nothing
+        draw = do
+          pn <- readIORef startedAt >>= \case
+            Nothing -> readIORef audioPosn
+            Just tstart -> do
+              tend <- SDL.getTicks
+              let diffSeconds = fromIntegral (tend - tstart) / 1000
+              (+ diffSeconds / stretchTime) <$> readIORef audioPosn
+          let rowN = rowNumber bts pn
           zero $ SDL.renderClear rend
           renderRow rend (rows !! rowN) (0, 0)
           SDL.renderPresent rend
+    start
     fixFrames 16 $ \loop -> do
       draw
       fix $ \eloop -> pollEvent >>= \case
-        Just (SDL.QuitEvent {}) -> killThread tid
+        Just (SDL.QuitEvent {}) -> stop
         Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
           -- Let user adjust height, but reset width to sheetWidth
           height <- alloca $ \pw -> alloca $ \ph -> do
@@ -79,6 +115,14 @@ main = do
             peek ph
           SDL.setWindowSize window sheetWidth height
           eloop
+        Just (SDL.KeyboardEvent
+          { SDL.eventType = SDL.SDL_KEYDOWN
+          , SDL.keyboardEventRepeat = 0
+          , SDL.keyboardEventKeysym = SDL.Keysym
+            { SDL.keysymScancode = SDL.SDL_SCANCODE_SPACE }
+          }) -> readIORef startedAt >>= \case
+          Nothing -> start >> eloop
+          Just _  -> stop  >> eloop
         Just _ -> eloop
         Nothing -> loop
 
