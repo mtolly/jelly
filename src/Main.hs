@@ -16,6 +16,7 @@ import Data.Conduit
 import Data.Functor (void)
 import System.Environment (getArgs, getProgName)
 import Data.Maybe (catMaybes)
+import Control.Applicative ((<$>))
 
 import Jammit
 import Audio
@@ -26,7 +27,8 @@ main = do
     [song] -> return song
     _      -> getProgName >>= \pn -> error $ "Usage: "++pn++" song-folder"
 
-  withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
+  withALContext
+    $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
     $ withSDLImage [Image.InitPNG]
     $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
     $ \window rend -> do
@@ -37,50 +39,48 @@ main = do
     Just bts <- loadBeats song
 
     imgs <- findNotation (head fileTrks) song
-    Right texs <- fmap sequence $ mapM (Image.imgLoadTexture rend) imgs
+    Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) imgs
     let rows = splitRows (head fileTrks) texs
-    audio <- fmap catMaybes $ mapM (`findAudio` song) fileTrks
+    audio <- catMaybes <$> mapM (`findAudio` song) fileTrks
 
     putStrLn $ "Title: " ++ title info
     putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
 
-    withALContext $ do
-      hnds <- forM audio $ \a ->
-        Snd.openFile a Snd.ReadMode Snd.defaultInfo
-      srcs <- AL.genObjectNames $ length hnds * 2
-      forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
-        AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
-      let source = mapOutput concat $ sequenceSources $ map (`load` 1000) hnds
-          sink = void $ sequenceSinks $ do
-            (i, src) <- zip [0..] srcs
-            return $ mapInput (!! i) (const Nothing) $ supply src 5
-          isFull = fmap (all (>= 4)) $ mapM (AL.get . AL.buffersQueued) srcs
-          stretchTime = 1.2
-      tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
-      fix $ \loop -> isFull >>= \b -> unless b loop
-      start <- SDL.getTicks
-      AL.play srcs
+    hnds <- forM audio $ \a ->
+      Snd.openFile a Snd.ReadMode Snd.defaultInfo
+    srcs <- AL.genObjectNames $ length hnds * 2
+    forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
+      AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
+    let source = mapOutput concat $ sequenceSources $ map (`load` 1000) hnds
+        sink = void $ sequenceSinks $ do
+          (i, src) <- zip [0..] srcs
+          return $ mapInput (!! i) (const Nothing) $ supply src 5
+        isFull = all (>= 4) <$> mapM (AL.get . AL.buffersQueued) srcs
+        stretchTime = 1.2
+    tid <- forkIO $ source $$ stretch 44100 (length srcs) stretchTime 1 =$= sink
+    fix $ \loop -> isFull >>= \b -> unless b loop
+    start <- SDL.getTicks
+    AL.play srcs
 
-      let draw = do
-            now <- SDL.getTicks
-            let rowN = rowNumber bts $ (fromIntegral (now - start) / 1000) / stretchTime
-            zero $ SDL.renderClear rend
-            renderRow rend (rows !! rowN) (0, 0)
-            SDL.renderPresent rend
-      fixFrames 16 $ \loop -> do
-        draw
-        fix $ \eloop -> pollEvent >>= \case
-          Just (SDL.QuitEvent {}) -> do
-            killThread tid
-          Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-            -- Let user adjust height, but reset width to sheetWidth
-            height <- alloca $ \pw -> alloca $ \ph -> do
-              SDL.getWindowSize window pw ph
-              peek ph
-            SDL.setWindowSize window sheetWidth height
-            eloop
-          Just _ -> eloop
-          Nothing -> loop
+    let draw = do
+          now <- SDL.getTicks
+          let rowN = rowNumber bts $ (fromIntegral (now - start) / 1000) / stretchTime
+          zero $ SDL.renderClear rend
+          renderRow rend (rows !! rowN) (0, 0)
+          SDL.renderPresent rend
+    fixFrames 16 $ \loop -> do
+      draw
+      fix $ \eloop -> pollEvent >>= \case
+        Just (SDL.QuitEvent {}) -> killThread tid
+        Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
+          -- Let user adjust height, but reset width to sheetWidth
+          height <- alloca $ \pw -> alloca $ \ph -> do
+            SDL.getWindowSize window pw ph
+            peek ph
+          SDL.setWindowSize window sheetWidth height
+          eloop
+        Just _ -> eloop
+        Nothing -> loop
 
 withSDL :: [SDL.InitFlag] -> IO a -> IO a
 withSDL flags = bracket_
@@ -153,7 +153,7 @@ zero act = do
 -- | Returns Just an event if there is one currently in the queue.
 pollEvent :: IO (Maybe SDL.Event)
 pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
-  1 -> fmap Just $ peek pevt
+  1 -> Just <$> peek pevt
   _ -> return Nothing
 
 -- | Renders a sequence of images at 1:1 aspect ratio in a vertical sequence.
@@ -170,7 +170,7 @@ renderRow rend ((t, r) : rest) (x, y) = do
 -- sequence of texture sections to be rendered in a vertical requence.
 splitRows :: Track -> [SDL.Texture] -> [[(SDL.Texture, SDL.Rect)]]
 splitRows trk = go 0 where
-  Just height = fmap fromIntegral $ scoreSystemInterval trk
+  Just height = fromIntegral <$> scoreSystemInterval trk
   go _ []          = []
   go y ts@(t : tt) = case compare (y + height) sheetHeight of
     LT -> [(t, SDL.Rect 0 y sheetWidth height)] : go (y + height) ts

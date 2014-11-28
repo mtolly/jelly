@@ -62,7 +62,7 @@ supply src n = fix $ \loop -> do
       Just vf -> do
         let v = convertAudio vf
         liftIO $ do
-          buf <- liftIO $ AL.genObjectName
+          buf <- liftIO AL.genObjectName
           V.unsafeWith v $ \p -> do
             let mem = AL.MemoryRegion p $ fromIntegral vsize
                 vsize = V.length v * sizeOf (v V.! 0)
