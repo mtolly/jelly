@@ -104,7 +104,7 @@ main = do
               (+ diffSeconds / speed) <$> readIORef audioPosn
           let rowN = rowNumber bts pn
           zero $ SDL.renderClear rend
-          renderRow rend (rows !! rowN) (0, 0)
+          renderRow rend (concat $ drop rowN rows) (0, 0)
           SDL.renderPresent rend
         pauseThenDo act = readIORef startedAt >>= \case
           Nothing -> act
@@ -219,14 +219,21 @@ pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
   _ -> return Nothing
 
 -- | Renders a sequence of images at 1:1 aspect ratio in a vertical sequence.
+-- Stops rendering images once they go below the window's bottom edge.
 renderRow :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
 renderRow _    []              _      = return ()
 renderRow rend ((t, r) : rest) (x, y) = do
-  alloca $ \p0 -> alloca $ \p1 -> do
-    poke p0 r
-    poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
-    zero $ SDL.renderCopy rend t p0 p1
-  renderRow rend rest (x, y + SDL.rectH r)
+  h <- alloca $ \pw -> alloca $ \ph -> do
+    zero $ SDL.getRendererOutputSize rend pw ph
+    peek ph
+  if y >= h
+    then return ()
+    else do
+      alloca $ \p0 -> alloca $ \p1 -> do
+        poke p0 r
+        poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
+        zero $ SDL.renderCopy rend t p0 p1
+      renderRow rend rest (x, y + SDL.rectH r)
 
 -- | Splits sheet music images into a list of rows, where each row is a
 -- sequence of texture sections to be rendered in a vertical requence.
