@@ -31,11 +31,12 @@ load h c = let
       loop
 
 stretch :: RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
-  -> Conduit [V.Vector Float] IO [V.Vector Float]
-stretch _ _ 1 1 = C.map id
-stretch a b c d = do
+  -> Int -> Conduit [V.Vector Float] IO [V.Vector Float]
+stretch _ _ 1 1 _       = C.map id
+stretch a b c d maxSize = do
   let opts = RB.defaultOptions { RB.oProcess = RB.RealTime }
   s <- liftIO $ RB.new a b opts c d
+  liftIO $ RB.setMaxProcessSize s maxSize
   fix $ \loop -> liftIO (RB.available s) >>= \case
     Nothing -> return () -- shouldn't happen?
     Just 0 -> liftIO (RB.getSamplesRequired s) >>= \case
