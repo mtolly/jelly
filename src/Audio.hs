@@ -4,6 +4,7 @@ module Audio where
 import qualified Sound.OpenAL as AL
 import qualified Sound.RubberBand as RB
 import Data.Conduit
+import qualified Data.Conduit.List as C
 import qualified Data.Vector.Storable as V
 import Foreign.Storable (sizeOf)
 import Data.Int (Int16)
@@ -31,6 +32,7 @@ load h c = let
 
 stretch :: RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
   -> Conduit [V.Vector Float] IO [V.Vector Float]
+stretch _ _ 1 1 = C.map id
 stretch a b c d = do
   let opts = RB.defaultOptions { RB.oProcess = RB.RealTime }
   s <- liftIO $ RB.new a b opts c d
