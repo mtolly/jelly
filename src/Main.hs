@@ -103,6 +103,9 @@ main = do
           zero $ SDL.renderClear rend
           renderRow rend (rows !! rowN) (0, 0)
           SDL.renderPresent rend
+        pauseThenDo act = readIORef startedAt >>= \case
+          Nothing -> act
+          Just _  -> stop >> act >> threadDelay 100000 >> start
     start
     fixFrames 16 $ \loop -> do
       draw
@@ -115,16 +118,24 @@ main = do
             peek ph
           SDL.setWindowSize window sheetWidth height
           eloop
-        Just (SDL.KeyboardEvent
-          { SDL.eventType = SDL.SDL_KEYDOWN
-          , SDL.keyboardEventRepeat = 0
-          , SDL.keyboardEventKeysym = SDL.Keysym
-            { SDL.keysymScancode = SDL.SDL_SCANCODE_SPACE }
-          }) -> readIORef startedAt >>= \case
+        Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> readIORef startedAt >>= \case
           Nothing -> start >> eloop
           Just _  -> stop  >> eloop
+        Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> do
+          pauseThenDo $ modifyIORef audioPosn $ \pn -> max 0 $ pn - 5
+          eloop
+        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> do
+          pauseThenDo $ modifyIORef audioPosn (+ 5)
+          eloop
         Just _ -> eloop
         Nothing -> loop
+
+pattern KeyPress scan <- SDL.KeyboardEvent
+  { SDL.eventType = SDL.SDL_KEYDOWN
+  , SDL.keyboardEventRepeat = 0
+  , SDL.keyboardEventKeysym = SDL.Keysym
+    { SDL.keysymScancode = scan }
+  }
 
 withSDL :: [SDL.InitFlag] -> IO a -> IO a
 withSDL flags = bracket_
