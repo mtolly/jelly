@@ -52,14 +52,13 @@ main = do
     srcs <- AL.genObjectNames $ length hnds * 2
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
-    let source = mapOutput concat $ sequenceSources $ map (`load` maxSourceSize) hnds
+    let source = mapOutput concat $ sequenceSources $ map load hnds
         sink = void $ sequenceSinks $ do
           (i, src) <- zip [0..] srcs
           return $ mapInput (!! i) (const Nothing) $ supply src sinkQueueSize
-        pipeline speed = source $$ stretch 44100 (length srcs) speed 1 maxSourceSize =$= sink
+        pipeline speed = source $$ stretch 44100 (length srcs) speed 1 =$= sink
         isFull = all (>= sinkQueueSize - 1) <$> mapM (AL.get . AL.buffersQueued) srcs
-        maxSourceSize, sinkQueueSize :: (Integral a) => a
-        maxSourceSize = 1000
+        sinkQueueSize :: (Integral a) => a
         sinkQueueSize = 5
 
     audioPosn   <- newIORef 0       -- seconds
