@@ -1,25 +1,28 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE PatternSynonyms #-}
 module Main (main) where
 
-import qualified Graphics.UI.SDL as SDL
+import           Control.Applicative   ((<$>))
+import           Control.Concurrent    (forkIO, killThread, threadDelay)
+import           Control.Exception     (bracket, bracket_)
+import           Control.Monad         (forM, forM_, unless, when)
+import           Control.Monad.Fix     (fix)
+import           Data.Conduit          (($$), (=$=))
+import           Data.IORef            (modifyIORef, newIORef, readIORef,
+                                        writeIORef)
+import           Data.Maybe            (catMaybes)
+import           Foreign               (Ptr, Word32, alloca, nullPtr, peek,
+                                        poke, (.|.))
+import           Foreign.C             (CInt, peekCString, withCString)
+import qualified Graphics.UI.SDL       as SDL
 import qualified Graphics.UI.SDL.Image as Image
-import Foreign hiding (void)
-import Foreign.C
-import Control.Monad (unless, forM, forM_)
-import Control.Monad.Fix (fix)
-import Control.Concurrent (threadDelay, forkIO, killThread)
-import Control.Exception (bracket, bracket_)
-import qualified Sound.OpenAL as AL
-import qualified Sound.File.Sndfile as Snd
-import Data.Conduit
-import System.Environment (getArgs, getProgName)
-import Data.Maybe (catMaybes)
-import Control.Applicative ((<$>))
-import Data.IORef
+import qualified Sound.File.Sndfile    as Snd
+import           Sound.OpenAL          (($=))
+import qualified Sound.OpenAL          as AL
+import           System.Environment    (getArgs, getProgName)
 
-import Jammit
-import Audio
+import           Audio
+import           Jammit
 
 main :: IO ()
 main = do
@@ -50,7 +53,7 @@ main = do
       Snd.openFile a Snd.ReadMode Snd.defaultInfo
     srcs <- AL.genObjectNames $ length hnds * 2
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
-      AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
+      AL.sourcePosition src $= AL.Vertex3 x 0 0
     let sink = supply srcs sinkQueueSize
         pipeline 1 = load hnds $$ sink
         pipeline speed
@@ -149,13 +152,13 @@ pattern KeyPress scan <- SDL.KeyboardEvent
 
 withSDL :: [SDL.InitFlag] -> IO a -> IO a
 withSDL flags = bracket_
-  (zero $ SDL.init $ foldr (.|.) 0 flags)
-  SDL.quit
+  — do zero $ SDL.init $ foldr (.|.) 0 flags
+  — SDL.quit
 
 withSDLImage :: [Image.InitFlag] -> IO a -> IO a
 withSDLImage flags = bracket_
-  (Image.imgInit flags)
-  Image.imgQuit
+  — Image.imgInit flags
+  — Image.imgQuit
 
 withWindowAndRenderer :: String -> CInt -> CInt -> Word32
   -> (SDL.Window -> SDL.Renderer -> IO a) -> IO a
@@ -184,8 +187,8 @@ withALContext act = bracket
       >>= maybe (error "couldn't create audio context") return
     — AL.destroyContext
     — \ctxt -> bracket_
-      — AL.currentContext AL.$= Just ctxt
-      — AL.currentContext AL.$= Nothing
+      — AL.currentContext $= Just ctxt
+      — AL.currentContext $= Nothing
       — act
 
 -- | Like using "fix" to create a loop, except we start 2 iterations of the loop
@@ -229,14 +232,12 @@ renderRow rend ((t, r) : rest) (x, y) = do
   h <- alloca $ \pw -> alloca $ \ph -> do
     zero $ SDL.getRendererOutputSize rend pw ph
     peek ph
-  if y >= h
-    then return ()
-    else do
-      alloca $ \p0 -> alloca $ \p1 -> do
-        poke p0 r
-        poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
-        zero $ SDL.renderCopy rend t p0 p1
-      renderRow rend rest (x, y + SDL.rectH r)
+  when (y < h) $ do
+    alloca $ \p0 -> alloca $ \p1 -> do
+      poke p0 r
+      poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
+      zero $ SDL.renderCopy rend t p0 p1
+    renderRow rend rest (x, y + SDL.rectH r)
 
 -- | Splits sheet music images into a list of rows, where each row is a
 -- sequence of texture sections to be rendered in a vertical requence.

@@ -25,20 +25,19 @@ module Jammit
 , sheetWidth, sheetHeight
 ) where
 
-import Control.Applicative ((<$>), (<*>), liftA2)
-import Control.Arrow ((***))
-import Control.Exception (evaluate)
-import Control.Monad (filterM, guard)
-import Data.Char (toLower, toUpper)
-import Data.Maybe (catMaybes)
-import System.Environment (lookupEnv)
-import Text.Read (readMaybe)
-
-import qualified Data.Map as Map
-import qualified Data.PropertyList as PL
-import qualified System.Directory as Dir
-import System.FilePath ((</>))
-import qualified System.Info as Info
+import           Control.Applicative (liftA2, (<$>), (<*>))
+import           Control.Arrow       ((***))
+import           Control.Exception   (evaluate)
+import           Control.Monad       (filterM, guard)
+import           Data.Char           (toLower, toUpper)
+import qualified Data.Map            as Map
+import           Data.Maybe          (catMaybes)
+import qualified Data.PropertyList   as PL
+import qualified System.Directory    as Dir
+import           System.Environment  (lookupEnv)
+import           System.FilePath     ((</>))
+import qualified System.Info         as Info
+import           Text.Read           (readMaybe)
 
 -- | The Enum instance corresponds to the number used in the "instrument"
 -- property, and the names (used by Show/Read) are capitalized versions of those
