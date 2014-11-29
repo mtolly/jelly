@@ -3,13 +3,12 @@
 module Main (main) where
 
 import           Control.Applicative   ((<$>))
-import           Control.Concurrent    (forkIO, killThread, threadDelay)
+import           Control.Concurrent    (ThreadId, forkIO, killThread,
+                                        threadDelay)
 import           Control.Exception     (bracket, bracket_)
 import           Control.Monad         (forM, forM_, unless, when)
 import           Control.Monad.Fix     (fix)
 import           Data.Conduit          (($$), (=$=))
-import           Data.IORef            (modifyIORef, newIORef, readIORef,
-                                        writeIORef)
 import           Data.Maybe            (catMaybes)
 import           Foreign               (Ptr, Word32, alloca, nullPtr, peek,
                                         poke, (.|.))
@@ -65,83 +64,91 @@ main = do
         sinkQueueSize :: (Integral a) => a
         sinkQueueSize = 10
 
-    audioPosn   <- newIORef 0       -- seconds
-    startedAt   <- newIORef Nothing -- sdl ticks
-    audioThread <- newIORef Nothing -- thread id
-    playSpeed   <- newIORef 1       -- ratio of playback secs to original secs
-    let start = do
+    let start stopstate = do
           -- Seek all the audio handles to our saved position
-          pn <- readIORef audioPosn
-          forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek
-            $ round $ pn * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
+          forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek $ round $
+            audioPosn stopstate * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
           -- Start the audio conduit, and wait for it to fill the queues
-          speed <- readIORef playSpeed
-          forkIO (pipeline speed) >>= writeIORef audioThread . Just
+          tid <- forkIO $ pipeline $ playSpeed stopstate
           fix $ \loop -> isFull >>= \full -> unless full loop
           -- Mark the sdl ticks when we started audio
-          SDL.getTicks >>= writeIORef startedAt . Just
+          starttks <- fromIntegral <$> SDL.getTicks
           -- Start audio playback
           AL.play srcs
-        stop = readIORef startedAt >>= \case
-          Nothing -> return ()
-          Just tstart -> do
-            -- Update the audio position
-            writeIORef startedAt Nothing
-            tend <- SDL.getTicks
-            let diffSeconds = fromIntegral (tend - tstart) / 1000
-            speed <- readIORef playSpeed
-            modifyIORef audioPosn (+ diffSeconds / speed)
-            -- Stop audio, clear queues and delete buffers
-            AL.rewind srcs
-            forM_ srcs $ \src
-              ->  AL.get (AL.buffersProcessed src)
-              >>= AL.unqueueBuffers src
-              >>= AL.deleteObjectNames
-            -- Kill the audio thread
-            readIORef audioThread >>= maybe (return ()) killThread
-            writeIORef audioThread Nothing
-        draw = do
-          pn <- readIORef startedAt >>= \case
-            Nothing -> readIORef audioPosn
-            Just tstart -> do
-              tend <- SDL.getTicks
-              let diffSeconds = fromIntegral (tend - tstart) / 1000
-              speed <- readIORef playSpeed
-              (+ diffSeconds / speed) <$> readIORef audioPosn
+          return $ PlayState starttks tid stopstate
+        stop playstate = do
+          newpn <- updatePosition playstate
+          -- Stop audio, clear queues and delete buffers
+          AL.rewind srcs
+          forM_ srcs $ \src
+            ->  AL.get (AL.buffersProcessed src)
+            >>= AL.unqueueBuffers src
+            >>= AL.deleteObjectNames
+          -- Kill the audio thread
+          killThread $ audioThread playstate
+          return $ (stopState playstate) { audioPosn = newpn }
+        updatePosition playstate = do
+          let stopstate = stopState playstate
+          tend <- fromIntegral <$> SDL.getTicks
+          let diffSeconds = fromIntegral (tend - startTicks playstate) / 1000
+          return $ audioPosn stopstate + diffSeconds / playSpeed stopstate
+        draw s = do
+          pn <- case s of
+            Stopped StopState{audioPosn = pn} -> return pn
+            Playing playstate -> updatePosition playstate
           let rowN = rowNumber bts pn
           zero $ SDL.renderClear rend
           renderRow rend (concat $ drop rowN rows) (0, 0)
           SDL.renderPresent rend
-        pauseThenDo act = readIORef startedAt >>= \case
-          Nothing -> act
-          Just _  -> stop >> act >> threadDelay 100000 >> start
-    fixFrames 16 $ \loop -> do
-      draw
-      fix $ \eloop -> pollEvent >>= \case
-        Just (SDL.QuitEvent {}) -> stop
-        Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-          -- Let user adjust height, but reset width to sheetWidth
-          height <- alloca $ \pw -> alloca $ \ph -> do
-            SDL.getWindowSize window pw ph
-            peek ph
-          SDL.setWindowSize window sheetWidth height
-          eloop
-        Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> readIORef startedAt >>= \case
-          Nothing -> start >> eloop
-          Just _  -> stop  >> eloop
-        Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> do
-          pauseThenDo $ modifyIORef audioPosn $ \pn -> max 0 $ pn - 5
-          eloop
-        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> do
-          pauseThenDo $ modifyIORef audioPosn (+ 5)
-          eloop
-        Just (KeyPress SDL.SDL_SCANCODE_S) -> do
-          pauseThenDo $ modifyIORef playSpeed $ \case
-            1 -> 1.25
-            _ -> 1
-          eloop
-        Just _ -> eloop
-        Nothing -> loop
+        editStopped s statef = case s of
+          Stopped ss -> return $ Stopped $ statef ss
+          Playing ps -> do
+            ss <- stop ps
+            threadDelay 100000
+            fmap Playing $ start $ statef ss
+    let loop s = do
+          draw s
+          threadDelay 16000
+          eloop s
+        eloop s = pollEvent >>= \case
+          Just (SDL.QuitEvent {}) -> case s of
+            Playing ps -> stop ps >> return ()
+            Stopped _  -> return ()
+          Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
+            -- Let user adjust height, but reset width to sheetWidth
+            height <- alloca $ \pw -> alloca $ \ph -> do
+              SDL.getWindowSize window pw ph
+              peek ph
+            SDL.setWindowSize window sheetWidth height
+            eloop s
+          Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> case s of
+            Playing ps -> stop ps >>= eloop . Stopped
+            Stopped ss -> start ss >>= eloop . Playing
+          Just (KeyPress SDL.SDL_SCANCODE_LEFT) ->
+            editStopped s (\ss -> ss { audioPosn = max 0 $ audioPosn ss - 5 }) >>= eloop
+          Just (KeyPress SDL.SDL_SCANCODE_RIGHT) ->
+            editStopped s (\ss -> ss { audioPosn = audioPosn ss + 5 }) >>= eloop
+          Just (KeyPress SDL.SDL_SCANCODE_S) ->
+            editStopped s (\ss -> ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 })
+              >>= eloop
+          Just _ -> eloop s
+          Nothing -> loop s
+    loop $ Stopped StopState{ audioPosn = 0, playSpeed = 1 }
+
+data StopState = StopState
+  { audioPosn :: Double -- seconds
+  , playSpeed :: Double -- ratio of playback secs to original secs
+  }
+
+data PlayState = PlayState
+  { startTicks  :: Int -- sdl ticks
+  , audioThread :: ThreadId
+  , stopState   :: StopState
+  }
+
+data State
+  = Stopped StopState
+  | Playing PlayState
 
 pattern KeyPress scan <- SDL.KeyboardEvent
   { SDL.eventType = SDL.SDL_KEYDOWN
@@ -190,19 +197,6 @@ withALContext act = bracket
       — AL.currentContext $= Just ctxt
       — AL.currentContext $= Nothing
       — act
-
--- | Like using "fix" to create a loop, except we start 2 iterations of the loop
--- no faster than the given number of milliseconds apart.
-fixFrames :: Word32 -> (IO a -> IO a) -> IO a
-fixFrames frameTime loop = go where
-  go = do
-    start <- SDL.getTicks
-    loop $ do
-      end <- SDL.getTicks
-      let micro :: Int
-          micro = fromIntegral frameTime - (fromIntegral end - fromIntegral start)
-      threadDelay $ max 0 micro * 1000
-      go
 
 -- | Extracts and throws an SDL error if the action returns a null pointer.
 notNull :: IO (Ptr a) -> IO (Ptr a)
