@@ -116,6 +116,17 @@ main = do
           ss <- stop ps
           threadDelay 100000
           fmap Playing $ start $ statef ss
+      toggleVolume i s = do
+        let ss = getStopState s
+            vol = audioGains ss !! i
+            vol' = if vol == 1 then 0 else 1
+            ss' = ss { audioGains = updateNth i vol' $ audioGains ss }
+            s' = setStopState ss' s
+        forM_ (take 2 $ drop (i * 2) srcs) $ \src -> do
+          AL.sourceGain src $= realToFrac vol'
+        return s'
+      updateNth i x xs = case splitAt i xs of
+        (ys, zs) -> ys ++ [x] ++ drop 1 zs
     let
       loop s = do
         draw s
@@ -135,17 +146,29 @@ main = do
         Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> case s of
           Playing ps -> stop ps >>= eloop . Stopped
           Stopped ss -> start ss >>= eloop . Playing
-        Just (KeyPress SDL.SDL_SCANCODE_LEFT) ->
-          editStopped s (\ss -> ss { audioPosn = max 0 $ audioPosn ss - 5 }) >>= eloop
-        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) ->
-          editStopped s (\ss -> ss { audioPosn = audioPosn ss + 5 }) >>= eloop
-        Just (KeyPress SDL.SDL_SCANCODE_S) ->
-          editStopped s (\ss -> ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 })
-            >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> do
+          s' <- editStopped s $ \ss ->
+            ss { audioPosn = max 0 $ audioPosn ss - 5 }
+          eloop s'
+        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> do
+          s' <- editStopped s $ \ss ->
+            ss { audioPosn = audioPosn ss + 5 }
+          eloop s'
+        Just (KeyPress SDL.SDL_SCANCODE_S) -> do
+          s' <- editStopped s $ \ss ->
+            ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 }
+          eloop s'
+        Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
         Just _  -> eloop s
         Nothing -> loop  s
 
-    loop $ Stopped StopState{ audioPosn = 0, playSpeed = 1 }
+    loop $ Stopped StopState
+      { audioPosn  = 0
+      , playSpeed  = 1
+      , audioGains = map (const 1) hnds
+      }
 
 -- | The number of blocks that audio sources should be filled up to.
 sinkQueueSize :: (Integral a) => a
@@ -154,6 +177,7 @@ sinkQueueSize = 10
 data StopState = StopState
   { audioPosn :: Double -- seconds
   , playSpeed :: Double -- ratio of playback secs to original secs
+  , audioGains :: [Double]
   } deriving (Eq, Ord, Show, Read)
 
 data PlayState = PlayState
@@ -166,6 +190,15 @@ data State
   = Stopped StopState
   | Playing PlayState
   deriving (Eq)
+
+getStopState :: State -> StopState
+getStopState (Playing PlayState{ stopState = ss }) = ss
+getStopState (Stopped ss) = ss
+
+setStopState :: StopState -> State -> State
+setStopState ss = \case
+  Playing ps -> Playing ps{ stopState = ss }
+  Stopped _  -> Stopped ss
 
 pattern KeyPress scan <- SDL.KeyboardEvent
   { SDL.eventType           = SDL.SDL_KEYDOWN
