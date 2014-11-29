@@ -25,6 +25,7 @@ import           Jammit
 
 main :: IO ()
 main = do
+
   song <- getArgs >>= \case
     [song] -> return song
     _      -> getProgName >>= \pn -> error $ "Usage: "++pn++" song-folder"
@@ -35,15 +36,15 @@ main = do
     $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
     $ \window rend -> do
 
-    Just info <- loadInfo song
+    Just info <- loadInfo   song
     Just trks <- loadTracks song
+    Just bts  <- loadBeats  song
     let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
-    Just bts <- loadBeats song
 
-    imgs <- findNotation (head fileTrks) song
+    imgs       <- findNotation (head fileTrks) song
     Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) imgs
-    let rows = splitRows (head fileTrks) texs
-    audio <- catMaybes <$> mapM (`findAudio` song) fileTrks
+    let rows   =  splitRows (head fileTrks) texs
+    audio      <- catMaybes <$> mapM (`findAudio` song) fileTrks
 
     putStrLn $ "Title: " ++ title info
     putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
@@ -53,6 +54,7 @@ main = do
     srcs <- AL.genObjectNames $ length hnds * 2
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src $= AL.Vertex3 x 0 0
+
     let sink = supply srcs sinkQueueSize
         pipeline 1 = load hnds $$ sink
         pipeline speed
@@ -64,97 +66,104 @@ main = do
         sinkQueueSize :: (Integral a) => a
         sinkQueueSize = 10
 
-    let start stopstate = do
-          -- Seek all the audio handles to our saved position
-          forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek $ round $
-            audioPosn stopstate * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
-          -- Start the audio conduit, and wait for it to fill the queues
-          tid <- forkIO $ pipeline $ playSpeed stopstate
-          fix $ \loop -> isFull >>= \full -> unless full loop
-          -- Mark the sdl ticks when we started audio
-          starttks <- fromIntegral <$> SDL.getTicks
-          -- Start audio playback
-          AL.play srcs
-          return $ PlayState starttks tid stopstate
-        stop playstate = do
-          newpn <- updatePosition playstate
-          -- Stop audio, clear queues and delete buffers
-          AL.rewind srcs
-          forM_ srcs $ \src
-            ->  AL.get (AL.buffersProcessed src)
-            >>= AL.unqueueBuffers src
-            >>= AL.deleteObjectNames
-          -- Kill the audio thread
-          killThread $ audioThread playstate
-          return $ (stopState playstate) { audioPosn = newpn }
-        updatePosition playstate = do
-          let stopstate = stopState playstate
-          tend <- fromIntegral <$> SDL.getTicks
-          let diffSeconds = fromIntegral (tend - startTicks playstate) / 1000
-          return $ audioPosn stopstate + diffSeconds / playSpeed stopstate
-        draw s = do
-          pn <- case s of
-            Stopped StopState{audioPosn = pn} -> return pn
-            Playing playstate -> updatePosition playstate
-          let rowN = rowNumber bts pn
-          zero $ SDL.renderClear rend
-          renderRow rend (concat $ drop rowN rows) (0, 0)
-          SDL.renderPresent rend
-        editStopped s statef = case s of
-          Stopped ss -> return $ Stopped $ statef ss
-          Playing ps -> do
-            ss <- stop ps
-            threadDelay 100000
-            fmap Playing $ start $ statef ss
-    let loop s = do
-          draw s
-          threadDelay 16000
+    let
+      updatePosition playstate = do
+        let stopstate = stopState playstate
+        tend <- fromIntegral <$> SDL.getTicks
+        let diffSeconds = fromIntegral (tend - startTicks playstate) / 1000
+        return $ audioPosn stopstate + diffSeconds / playSpeed stopstate
+    let
+      start stopstate = do
+        -- Seek all the audio handles to our saved position
+        forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek $ round $
+          audioPosn stopstate * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
+        -- Start the audio conduit, and wait for it to fill the queues
+        tid <- forkIO $ pipeline $ playSpeed stopstate
+        fix $ \loop -> isFull >>= \full -> unless full loop
+        -- Mark the sdl ticks when we started audio
+        starttks <- fromIntegral <$> SDL.getTicks
+        -- Start audio playback
+        AL.play srcs
+        return $ PlayState starttks tid stopstate
+    let
+      stop playstate = do
+        newpn <- updatePosition playstate
+        -- Stop audio, clear queues and delete buffers
+        AL.rewind srcs
+        forM_ srcs $ \src
+          ->  AL.get (AL.buffersProcessed src)
+          >>= AL.unqueueBuffers src
+          >>= AL.deleteObjectNames
+        -- Kill the audio thread
+        killThread $ audioThread playstate
+        return $ (stopState playstate) { audioPosn = newpn }
+    let
+      draw s = do
+        pn <- case s of
+          Stopped StopState{audioPosn = pn} -> return pn
+          Playing playstate -> updatePosition playstate
+        let rowN = rowNumber bts pn
+        zero $ SDL.renderClear rend
+        renderRow rend (concat $ drop rowN rows) (0, 0)
+        SDL.renderPresent rend
+    let
+      editStopped s statef = case s of
+        Stopped ss -> return $ Stopped $ statef ss
+        Playing ps -> do
+          ss <- stop ps
+          threadDelay 100000
+          fmap Playing $ start $ statef ss
+    let
+      loop s = do
+        draw s
+        threadDelay 16000 -- ehhh, fix this later
+        eloop s
+      eloop s = pollEvent >>= \case
+        Just (SDL.QuitEvent {}) -> case s of
+          Playing ps -> stop ps >> return ()
+          Stopped _  -> return ()
+        Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
+          -- Let user adjust height, but reset width to sheetWidth
+          height <- alloca $ \pw -> alloca $ \ph -> do
+            SDL.getWindowSize window pw ph
+            peek ph
+          SDL.setWindowSize window sheetWidth height
           eloop s
-        eloop s = pollEvent >>= \case
-          Just (SDL.QuitEvent {}) -> case s of
-            Playing ps -> stop ps >> return ()
-            Stopped _  -> return ()
-          Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-            -- Let user adjust height, but reset width to sheetWidth
-            height <- alloca $ \pw -> alloca $ \ph -> do
-              SDL.getWindowSize window pw ph
-              peek ph
-            SDL.setWindowSize window sheetWidth height
-            eloop s
-          Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> case s of
-            Playing ps -> stop ps >>= eloop . Stopped
-            Stopped ss -> start ss >>= eloop . Playing
-          Just (KeyPress SDL.SDL_SCANCODE_LEFT) ->
-            editStopped s (\ss -> ss { audioPosn = max 0 $ audioPosn ss - 5 }) >>= eloop
-          Just (KeyPress SDL.SDL_SCANCODE_RIGHT) ->
-            editStopped s (\ss -> ss { audioPosn = audioPosn ss + 5 }) >>= eloop
-          Just (KeyPress SDL.SDL_SCANCODE_S) ->
-            editStopped s (\ss -> ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 })
-              >>= eloop
-          Just _ -> eloop s
-          Nothing -> loop s
+        Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> case s of
+          Playing ps -> stop ps >>= eloop . Stopped
+          Stopped ss -> start ss >>= eloop . Playing
+        Just (KeyPress SDL.SDL_SCANCODE_LEFT) ->
+          editStopped s (\ss -> ss { audioPosn = max 0 $ audioPosn ss - 5 }) >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) ->
+          editStopped s (\ss -> ss { audioPosn = audioPosn ss + 5 }) >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_S) ->
+          editStopped s (\ss -> ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 })
+            >>= eloop
+        Just _  -> eloop s
+        Nothing -> loop  s
+
     loop $ Stopped StopState{ audioPosn = 0, playSpeed = 1 }
 
 data StopState = StopState
   { audioPosn :: Double -- seconds
   , playSpeed :: Double -- ratio of playback secs to original secs
-  }
+  } deriving (Eq, Ord, Show, Read)
 
 data PlayState = PlayState
   { startTicks  :: Int -- sdl ticks
   , audioThread :: ThreadId
   , stopState   :: StopState
-  }
+  } deriving (Eq, Ord, Show)
 
 data State
   = Stopped StopState
   | Playing PlayState
+  deriving (Eq, Ord, Show)
 
 pattern KeyPress scan <- SDL.KeyboardEvent
-  { SDL.eventType = SDL.SDL_KEYDOWN
+  { SDL.eventType           = SDL.SDL_KEYDOWN
   , SDL.keyboardEventRepeat = 0
-  , SDL.keyboardEventKeysym = SDL.Keysym
-    { SDL.keysymScancode = scan }
+  , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
   }
 
 withSDL :: [SDL.InitFlag] -> IO a -> IO a
@@ -180,7 +189,7 @@ withWindowAndRenderer name w h flags act = bracket
       flags -- flags
   — SDL.destroyWindow
   — \window -> bracket
-    — notNull (SDL.createRenderer window (-1) 0)
+    — do notNull $ SDL.createRenderer window (-1) 0
     — SDL.destroyRenderer
     — \renderer -> act window renderer
 
@@ -223,8 +232,8 @@ pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
 renderRow :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
 renderRow _    []              _      = return ()
 renderRow rend ((t, r) : rest) (x, y) = do
-  h <- alloca $ \pw -> alloca $ \ph -> do
-    zero $ SDL.getRendererOutputSize rend pw ph
+  h <- alloca $ \ph -> do
+    zero $ SDL.getRendererOutputSize rend nullPtr ph
     peek ph
   when (y < h) $ do
     alloca $ \p0 -> alloca $ \p1 -> do
@@ -258,6 +267,8 @@ rowNumber bts pos = let
   downs = map position $ filter isDownbeat bts
   in div (max 0 $ length (takeWhile (< pos) downs) - 2) 2
 
+-- | Clever syntax trick: turn function call arguments into \"bulleted lists\".
+-- See definitions of "withWindowAndRenderer", "withALContext", etc.
 (—) :: (a -> b) -> a -> b
 (—) = ($)
 infixl 0 —

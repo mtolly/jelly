@@ -17,15 +17,23 @@ import           Sound.OpenAL                     (($=))
 import qualified Sound.OpenAL                     as AL
 import qualified Sound.RubberBand                 as RB
 
-deinterleave :: (V.Storable a) => Int -> V.Vector a -> [V.Vector a]
+-- | Given a vector with interleaved samples, like @[L0, R0, L1, R1, ...]@,
+-- converts it into @[[L0, L1, ...], [R0, R1, ...]]@.
+deinterleave :: (V.Storable a)
+  => Int -- ^ The number of channels to split into.
+  -> V.Vector a
+  -> [V.Vector a]
 deinterleave n v = do
   let len = V.length v `div` n
   i <- [0 .. n - 1]
   return $ V.generate len $ \j -> v V.! (n * j + i)
 
-maxLoad :: Int
-maxLoad = 5000
+-- | Used as an arbitrary maximum size for audio input/output blocks.
+maxBlockSize :: Int
+maxBlockSize = 5000
 
+-- | Loads sample blocks from the given audio files.
+-- Seek the handles beforehand to load from a certain point in the file.
 load :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
   [Snd.Handle] -> C.Source IO [V.Vector e]
 load = C.mapOutput concat . C.sequenceSources . map loadOne
@@ -34,25 +42,23 @@ loadOne :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
   Snd.Handle -> C.Source IO [V.Vector e]
 loadOne h = let
   chans = Snd.channels $ Snd.hInfo h
-  in fix $ \loop -> liftIO (Snd.hGetBuffer h maxLoad) >>= \case
+  in fix $ \loop -> liftIO (Snd.hGetBuffer h maxBlockSize) >>= \case
     Nothing -> return ()
     Just buf -> do
       C.yield $ deinterleave chans $ SndV.fromBuffer buf
       loop
 
-breakBlock :: Int -> [V.Vector Float] -> [[V.Vector Float]]
+breakBlock
+  :: Int -- ^ Maximum size of the output blocks
+  -> [V.Vector Float] -- ^ One vector per channel
+  -> [[V.Vector Float]]
 breakBlock maxSize chans = if V.length (head chans) <= maxSize
   then [chans]
   else let
     pairs = map (V.splitAt maxSize) chans
     in map fst pairs : breakBlock maxSize (map snd pairs)
 
-maxStretchInput :: Int
-maxStretchInput = 5000
-
-maxStretchOutput :: Int
-maxStretchOutput = 5000
-
+-- | An arbitrary \"this thread has nothing to do immediately\" wait.
 shortWait :: (MonadIO m) => m ()
 shortWait = liftIO $ threadDelay 1000
 
@@ -61,7 +67,7 @@ stretch :: RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
 stretch a b c d = do
   let opts = RB.defaultOptions { RB.oProcess = RB.RealTime }
   s <- liftIO $ RB.new a b opts c d
-  liftIO $ RB.setMaxProcessSize s maxStretchInput
+  liftIO $ RB.setMaxProcessSize s maxBlockSize
   fix $ \loop -> liftIO (RB.available s) >>= \case
     Nothing -> return () -- shouldn't happen?
     Just 0 -> liftIO (RB.getSamplesRequired s) >>= \case
@@ -69,15 +75,17 @@ stretch a b c d = do
       _ -> C.await >>= \case
         Nothing    -> return ()
         Just block -> do
-          forM_ (breakBlock maxStretchInput block) $ \blk ->
+          forM_ (breakBlock maxBlockSize block) $ \blk ->
             liftIO $ RB.process s blk False
           loop
-    Just n -> liftIO (RB.retrieve s $ min n maxStretchOutput) >>= C.yield >> loop
+    Just n -> liftIO (RB.retrieve s $ min n maxBlockSize) >>= C.yield >> loop
 
+-- | Translates samples from floats (Rubber Band) to 16-bit ints (OpenAL).
 convert :: (Monad m) => C.Conduit [V.Vector Float] m [V.Vector Int16]
 convert =
   CL.map $ map $ V.map $ \f -> round $ f * fromIntegral (maxBound :: Int16)
 
+-- | Converts a vector of samples to an OpenAL buffer.
 makeBuffer :: V.Vector Int16 -> IO AL.Buffer
 makeBuffer v = do
   buf <- liftIO AL.genObjectName
@@ -87,7 +95,11 @@ makeBuffer v = do
     AL.bufferData buf $= AL.BufferData mem AL.Mono16 44100
   return buf
 
-supply :: [AL.Source] -> Int -> C.Sink [V.Vector Int16] IO ()
+-- | Continually feeds the OpenAL sources with sample blocks from upstream.
+supply
+  :: [AL.Source]
+  -> Int -- ^ Sources will be supplied if they have less than this many blocks.
+  -> C.Sink [V.Vector Int16] IO ()
 supply srcs n = fix $ \loop -> do
   -- First, check if old buffers need to be removed
   pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
