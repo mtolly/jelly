@@ -2,23 +2,23 @@
 {-# LANGUAGE PatternSynonyms #-}
 module Main (main) where
 
-import           Control.Applicative   ((<$>))
-import           Control.Concurrent    (ThreadId, forkIO, killThread,
-                                        threadDelay)
-import           Control.Exception     (bracket, bracket_)
-import           Control.Monad         (forM, forM_, unless, when)
-import           Control.Monad.Fix     (fix)
-import           Data.Conduit          (($$), (=$=))
-import           Data.Maybe            (catMaybes)
-import           Foreign               (Ptr, Word32, alloca, nullPtr, peek,
-                                        poke, (.|.))
-import           Foreign.C             (CInt, peekCString, withCString)
-import qualified Graphics.UI.SDL       as SDL
-import qualified Graphics.UI.SDL.Image as Image
-import qualified Sound.File.Sndfile    as Snd
-import           Sound.OpenAL          (($=))
-import qualified Sound.OpenAL          as AL
-import           System.Environment    (getArgs, getProgName)
+import           Control.Applicative     ((<$>))
+import           Control.Concurrent      (forkIO, threadDelay)
+import           Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar)
+import           Control.Exception       (bracket, bracket_)
+import           Control.Monad           (forM, forM_, unless, when)
+import           Control.Monad.Fix       (fix)
+import           Data.Conduit            (($$), (=$=))
+import           Data.Maybe              (catMaybes)
+import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
+                                          poke, (.|.))
+import           Foreign.C               (CInt, peekCString, withCString)
+import qualified Graphics.UI.SDL         as SDL
+import qualified Graphics.UI.SDL.Image   as Image
+import qualified Sound.File.Sndfile      as Snd
+import           Sound.OpenAL            (($=))
+import qualified Sound.OpenAL            as AL
+import           System.Environment      (getArgs, getProgName)
 
 import           Audio
 import           Jammit
@@ -55,48 +55,51 @@ main = do
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src $= AL.Vertex3 x 0 0
 
-    let sink = supply srcs sinkQueueSize
-        pipeline 1 = load hnds $$ sink
-        pipeline speed
-          =   load hnds
-          $$  stretch 44100 (length srcs) speed 1
-          =$= convert
-          =$= sink
-        isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
-        sinkQueueSize :: (Integral a) => a
-        sinkQueueSize = 10
-
     let
-      updatePosition playstate = do
-        let stopstate = stopState playstate
+      updatePosition ps = do
+        let ss = stopState ps
         tend <- fromIntegral <$> SDL.getTicks
-        let diffSeconds = fromIntegral (tend - startTicks playstate) / 1000
-        return $ audioPosn stopstate + diffSeconds / playSpeed stopstate
+        let diffSeconds = fromIntegral (tend - startTicks ps) / 1000
+        return $ audioPosn ss + diffSeconds / playSpeed ss
     let
-      start stopstate = do
+      isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
+      start ss = do
         -- Seek all the audio handles to our saved position
         forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek $ round $
-          audioPosn stopstate * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
+          audioPosn ss * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
         -- Start the audio conduit, and wait for it to fill the queues
-        tid <- forkIO $ pipeline $ playSpeed stopstate
+        mvar <- newEmptyMVar
+        let sink = supply srcs sinkQueueSize mvar
+            pipeline 1 = load hnds $$ sink
+            pipeline speed
+              =   load hnds
+              $$  stretch 44100 (length srcs) speed 1
+              =$= convert
+              =$= sink
+        _ <- forkIO $ pipeline $ playSpeed ss
         fix $ \loop -> isFull >>= \full -> unless full loop
         -- Mark the sdl ticks when we started audio
         starttks <- fromIntegral <$> SDL.getTicks
         -- Start audio playback
         AL.play srcs
-        return $ PlayState starttks tid stopstate
+        return $ PlayState
+          { startTicks  = starttks
+          , audioThread = mvar
+          , stopState   = ss
+          }
     let
-      stop playstate = do
-        newpn <- updatePosition playstate
+      stop ps = do
+        newpn <- updatePosition ps
+        -- Kill the audio thread
+        putMVar (audioThread ps) () -- signal the thread
+        putMVar (audioThread ps) () -- wait until thread removes the last ()
         -- Stop audio, clear queues and delete buffers
         AL.rewind srcs
         forM_ srcs $ \src
           ->  AL.get (AL.buffersProcessed src)
           >>= AL.unqueueBuffers src
           >>= AL.deleteObjectNames
-        -- Kill the audio thread
-        killThread $ audioThread playstate
-        return $ (stopState playstate) { audioPosn = newpn }
+        return $ (stopState ps) { audioPosn = newpn }
     let
       draw s = do
         pn <- case s of
@@ -144,6 +147,10 @@ main = do
 
     loop $ Stopped StopState{ audioPosn = 0, playSpeed = 1 }
 
+-- | The number of blocks that audio sources should be filled up to.
+sinkQueueSize :: (Integral a) => a
+sinkQueueSize = 10
+
 data StopState = StopState
   { audioPosn :: Double -- seconds
   , playSpeed :: Double -- ratio of playback secs to original secs
@@ -151,14 +158,14 @@ data StopState = StopState
 
 data PlayState = PlayState
   { startTicks  :: Int -- sdl ticks
-  , audioThread :: ThreadId
+  , audioThread :: MVar ()
   , stopState   :: StopState
-  } deriving (Eq, Ord, Show)
+  } deriving (Eq)
 
 data State
   = Stopped StopState
   | Playing PlayState
-  deriving (Eq, Ord, Show)
+  deriving (Eq)
 
 pattern KeyPress scan <- SDL.KeyboardEvent
   { SDL.eventType           = SDL.SDL_KEYDOWN

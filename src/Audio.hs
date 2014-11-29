@@ -3,6 +3,7 @@
 module Audio (load, stretch, convert, supply) where
 
 import           Control.Concurrent               (threadDelay)
+import           Control.Concurrent.MVar          (MVar, tryTakeMVar)
 import           Control.Monad                    (forM_, when)
 import           Control.Monad.Fix                (fix)
 import           Control.Monad.IO.Class           (MonadIO, liftIO)
@@ -99,22 +100,28 @@ makeBuffer v = do
 supply
   :: [AL.Source]
   -> Int -- ^ Sources will be supplied if they have less than this many blocks.
+  -> MVar () -- ^ To stop the pipeline, place () in here, and wait until empty.
   -> C.Sink [V.Vector Int16] IO ()
-supply srcs n = fix $ \loop -> do
-  -- First, check if old buffers need to be removed
-  pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
-  when (pr /= 0) $ liftIO $ forM_ srcs $ \src ->
-    AL.unqueueBuffers src pr >>= AL.deleteObjectNames
-  -- Then, check if we need to add new buffers
-  qu <- liftIO $ fmap (fromIntegral . minimum) $ mapM (AL.get . AL.buffersQueued) srcs
-  if qu >= n
-    then shortWait >> loop
-    else C.await >>= \case
-      -- If there are still queued buffers but no more input,
-      -- we must loop more to dequeue the remaining buffers.
-      Nothing -> when (qu /= 0) $ shortWait >> loop
-      Just vs -> do
-        forM_ (zip srcs vs) $ \(src, v) -> do
-          buf <- liftIO $ makeBuffer v
-          liftIO $ AL.queueBuffers src [buf]
-        loop
+supply srcs n mvar = fix $ \loop -> do
+  -- Check if pipeline has been requested to stop
+  mval <- liftIO $ tryTakeMVar mvar
+  case mval of
+    Just () -> return () -- done!
+    Nothing -> do
+      -- First, check if old buffers need to be removed
+      pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
+      when (pr /= 0) $ liftIO $ forM_ srcs $ \src ->
+        AL.unqueueBuffers src pr >>= AL.deleteObjectNames
+      -- Then, check if we need to add new buffers
+      qu <- liftIO $ fmap (fromIntegral . minimum) $ mapM (AL.get . AL.buffersQueued) srcs
+      if qu >= n
+        then shortWait >> loop
+        else C.await >>= \case
+          -- If there are still queued buffers but no more input,
+          -- we must loop more to dequeue the remaining buffers.
+          Nothing -> when (qu /= 0) $ shortWait >> loop
+          Just vs -> do
+            forM_ (zip srcs vs) $ \(src, v) -> do
+              buf <- liftIO $ makeBuffer v
+              liftIO $ AL.queueBuffers src [buf]
+            loop
