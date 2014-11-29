@@ -1,10 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
-module Audio (load, stretch, supply) where
+{-# LANGUAGE FlexibleContexts #-}
+module Audio (load, stretch, convert, supply) where
 
 import qualified Sound.OpenAL as AL
 import qualified Sound.RubberBand as RB
 import Data.Conduit
-import qualified Data.Conduit.List as C
+import qualified Data.Conduit.List as CL
 import qualified Data.Vector.Storable as V
 import Foreign.Storable (sizeOf)
 import Data.Int (Int16)
@@ -24,8 +25,13 @@ deinterleave n v = do
 maxLoad :: Int
 maxLoad = 5000
 
-load :: Snd.Handle -> Source IO [V.Vector Float]
-load h = let
+load :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
+  [Snd.Handle] -> Source IO [V.Vector e]
+load = mapOutput concat . sequenceSources . map loadOne
+
+loadOne :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
+  Snd.Handle -> Source IO [V.Vector e]
+loadOne h = let
   chans = Snd.channels $ Snd.hInfo h
   in fix $ \loop -> liftIO (Snd.hGetBuffer h maxLoad) >>= \case
     Nothing -> return ()
@@ -51,7 +57,6 @@ shortWait = liftIO $ threadDelay 1000
 
 stretch :: RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
   -> Conduit [V.Vector Float] IO [V.Vector Float]
-stretch _ _ 1 1 = C.map id
 stretch a b c d = do
   let opts = RB.defaultOptions { RB.oProcess = RB.RealTime }
   s <- liftIO $ RB.new a b opts c d
@@ -68,8 +73,9 @@ stretch a b c d = do
           loop
     Just n -> liftIO (RB.retrieve s $ min n maxStretchOutput) >>= yield >> loop
 
-convertAudio :: V.Vector Float -> V.Vector Int16
-convertAudio = V.map $ \f -> round $ f * fromIntegral (maxBound :: Int16)
+convert :: (Monad m) => Conduit [V.Vector Float] m [V.Vector Int16]
+convert =
+  CL.map $ map $ V.map $ \f -> round $ f * fromIntegral (maxBound :: Int16)
 
 makeBuffer :: V.Vector Int16 -> IO AL.Buffer
 makeBuffer v = do
@@ -80,14 +86,7 @@ makeBuffer v = do
     AL.bufferData buf AL.$= AL.BufferData mem AL.Mono16 44100
   return buf
 
-{-
-bufferSize :: AL.Buffer -> IO Int
-bufferSize buf = do
-  AL.BufferData (AL.MemoryRegion _ size) _ _ <- AL.get $ AL.bufferData buf
-  return $ fromIntegral size
--}
-
-supply :: [AL.Source] -> Int -> Sink [V.Vector Float] IO ()
+supply :: [AL.Source] -> Int -> Sink [V.Vector Int16] IO ()
 supply srcs n = fix $ \loop -> do
   -- First, check if old buffers need to be removed
   pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
@@ -103,6 +102,6 @@ supply srcs n = fix $ \loop -> do
       Nothing -> when (qu /= 0) $ shortWait >> loop
       Just vs -> do
         forM_ (zip srcs vs) $ \(src, v) -> do
-          buf <- liftIO $ makeBuffer $ convertAudio v
+          buf <- liftIO $ makeBuffer v
           liftIO $ AL.queueBuffers src [buf]
         loop
