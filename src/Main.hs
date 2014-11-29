@@ -13,7 +13,6 @@ import Control.Exception (bracket, bracket_)
 import qualified Sound.OpenAL as AL
 import qualified Sound.File.Sndfile as Snd
 import Data.Conduit
-import Data.Functor (void)
 import System.Environment (getArgs, getProgName)
 import Data.Maybe (catMaybes)
 import Control.Applicative ((<$>))
@@ -53,11 +52,9 @@ main = do
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src AL.$= AL.Vertex3 x 0 0
     let source = mapOutput concat $ sequenceSources $ map load hnds
-        sink = void $ sequenceSinks $ do
-          (i, src) <- zip [0..] srcs
-          return $ mapInput (!! i) (const Nothing) $ supply src sinkQueueSize
+        sink = supply srcs sinkQueueSize
         pipeline speed = source $$ stretch 44100 (length srcs) speed 1 =$= sink
-        isFull = all (>= sinkQueueSize - 1) <$> mapM (AL.get . AL.buffersQueued) srcs
+        isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
         sinkQueueSize :: (Integral a) => a
         sinkQueueSize = 5
 

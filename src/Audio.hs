@@ -80,25 +80,29 @@ makeBuffer v = do
     AL.bufferData buf AL.$= AL.BufferData mem AL.Mono16 44100
   return buf
 
+{-
 bufferSize :: AL.Buffer -> IO Int
 bufferSize buf = do
   AL.BufferData (AL.MemoryRegion _ size) _ _ <- AL.get $ AL.bufferData buf
   return $ fromIntegral size
+-}
 
-supply :: AL.Source -> Int -> Sink (V.Vector Float) IO ()
-supply src n = fix $ \loop -> do
+supply :: [AL.Source] -> Int -> Sink [V.Vector Float] IO ()
+supply srcs n = fix $ \loop -> do
   -- First, check if old buffers need to be removed
-  pr <- liftIO $ AL.get $ AL.buffersProcessed src
-  when (pr /= 0) $ liftIO $ AL.unqueueBuffers src pr >>= AL.deleteObjectNames
+  pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
+  when (pr /= 0) $ liftIO $ forM_ srcs $ \src ->
+    AL.unqueueBuffers src pr >>= AL.deleteObjectNames
   -- Then, check if we need to add new buffers
-  qu <- liftIO $ fmap fromIntegral $ AL.get $ AL.buffersQueued src
+  qu <- liftIO $ fmap (fromIntegral . minimum) $ mapM (AL.get . AL.buffersQueued) srcs
   if qu >= n
     then shortWait >> loop
     else await >>= \case
       -- If there are still queued buffers but no more input,
       -- we must loop more to dequeue the remaining buffers.
       Nothing -> when (qu /= 0) $ shortWait >> loop
-      Just v -> do
-        buf <- liftIO $ makeBuffer $ convertAudio v
-        liftIO $ AL.queueBuffers src [buf]
+      Just vs -> do
+        forM_ (zip srcs vs) $ \(src, v) -> do
+          buf <- liftIO $ makeBuffer $ convertAudio v
+          liftIO $ AL.queueBuffers src [buf]
         loop
