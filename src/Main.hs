@@ -9,6 +9,7 @@ import           Control.Exception       (bracket, bracket_)
 import           Control.Monad           (forM, forM_, unless, when)
 import           Control.Monad.Fix       (fix)
 import           Data.Conduit            (($$), (=$=))
+import           Data.List               (transpose)
 import           Data.Maybe              (catMaybes)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
@@ -59,7 +60,6 @@ main = do
         return $ if null tab
           then [Sheet (Notation part) notes]
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
-    let rows = sheetRows $ head sheets
     audio <- catMaybes <$> mapM (`findAudio` song) fileTrks
 
     putStrLn $ "Title: " ++ title info
@@ -122,8 +122,10 @@ main = do
           Stopped StopState{audioPosn = pn} -> return pn
           Playing playstate -> updatePosition playstate
         let rowN = rowNumber bts pn
+            sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
+            sheetStream = concat $ concat $ transpose $ map (drop rowN . sheetRows) sheetsToDraw
         zero $ SDL.renderClear rend
-        renderRow rend (concat $ drop rowN rows) (0, 0)
+        renderRow rend sheetStream (0, 0)
         SDL.renderPresent rend
     let
       editStopped s statef = case s of
@@ -143,6 +145,7 @@ main = do
         return s'
       updateNth i x xs = case splitAt i xs of
         (ys, zs) -> ys ++ [x] ++ drop 1 zs
+      flipNth i = zipWith ($) $ updateNth i not $ repeat id
     let
       loop s = do
         draw s
@@ -177,6 +180,14 @@ main = do
         Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_A) ->
+          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 0 $ sheetShow ss }) s
+        Just (KeyPress SDL.SDL_SCANCODE_S) ->
+          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 1 $ sheetShow ss }) s
+        Just (KeyPress SDL.SDL_SCANCODE_D) ->
+          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 2 $ sheetShow ss }) s
+        Just (KeyPress SDL.SDL_SCANCODE_F) ->
+          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 3 $ sheetShow ss }) s
         Just _  -> eloop s
         Nothing -> loop  s
 
@@ -184,6 +195,7 @@ main = do
       { audioPosn  = 0
       , playSpeed  = 1
       , audioGains = map (const 1) hnds
+      , sheetShow  = zipWith const (True : repeat False) sheets
       }
 
 -- | The number of blocks that audio sources should be filled up to.
@@ -191,9 +203,10 @@ sinkQueueSize :: (Integral a) => a
 sinkQueueSize = 10
 
 data StopState = StopState
-  { audioPosn :: Double -- seconds
-  , playSpeed :: Double -- ratio of playback secs to original secs
+  { audioPosn  :: Double -- seconds
+  , playSpeed  :: Double -- ratio of playback secs to original secs
   , audioGains :: [Double]
+  , sheetShow  :: [Bool]
   } deriving (Eq, Ord, Show, Read)
 
 data PlayState = PlayState
@@ -215,6 +228,9 @@ setStopState :: StopState -> State -> State
 setStopState ss = \case
   Playing ps -> Playing ps{ stopState = ss }
   Stopped _  -> Stopped ss
+
+mapStopState :: (StopState -> StopState) -> State -> State
+mapStopState f s = setStopState (f $ getStopState s) s
 
 pattern KeyPress scan <- SDL.KeyboardEvent
   { SDL.eventType           = SDL.SDL_KEYDOWN
