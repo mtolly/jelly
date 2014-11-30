@@ -187,6 +187,8 @@ main = do
       updateNth i x xs = case splitAt i xs of
         (ys, zs) -> ys ++ [x] ++ drop 1 zs
       flipNth i = zipWith ($) $ updateNth i not $ repeat id
+      toggleSheet i = mapStopState $
+        \ss -> ss { sheetShow = flipNth i $ sheetShow ss }
     let
       loop s = do
         draw s
@@ -221,14 +223,20 @@ main = do
         Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
-        Just (KeyPress SDL.SDL_SCANCODE_A) ->
-          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 0 $ sheetShow ss }) s
-        Just (KeyPress SDL.SDL_SCANCODE_S) ->
-          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 1 $ sheetShow ss }) s
-        Just (KeyPress SDL.SDL_SCANCODE_D) ->
-          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 2 $ sheetShow ss }) s
-        Just (KeyPress SDL.SDL_SCANCODE_F) ->
-          eloop $ mapStopState (\ss -> ss { sheetShow = flipNth 3 $ sheetShow ss }) s
+        Just (KeyPress SDL.SDL_SCANCODE_A) -> eloop $ toggleSheet 0 s
+        Just (KeyPress SDL.SDL_SCANCODE_S) -> eloop $ toggleSheet 1 s
+        Just (KeyPress SDL.SDL_SCANCODE_D) -> eloop $ toggleSheet 2 s
+        Just (KeyPress SDL.SDL_SCANCODE_F) -> eloop $ toggleSheet 3 s
+        Just (SDL.MouseButtonEvent
+          { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
+          , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
+          , SDL.mouseButtonEventX = mx
+          , SDL.mouseButtonEventY = my
+          })
+          | 0  <= my && my < 30 ->
+            eloop $ toggleSheet (fromIntegral $ div mx 100) s
+          | 30 <= my && my < 60 ->
+            toggleVolume (fromIntegral $ div mx 100) s >>= eloop
         Just _  -> eloop s
         Nothing -> loop  s
 
