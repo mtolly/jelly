@@ -23,6 +23,11 @@ import           System.Environment      (getArgs, getProgName)
 import           Audio
 import           Jammit
 
+data Sheet = Sheet
+  { sheetPart :: SheetPart
+  , sheetRows :: [[(SDL.Texture, SDL.Rect)]]
+  }
+
 main :: IO ()
 main = do
 
@@ -41,10 +46,21 @@ main = do
     Just bts  <- loadBeats  song
     let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
 
-    imgs       <- findNotation (head fileTrks) song
-    Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) imgs
-    let rows   =  splitRows (head fileTrks) texs
-    audio      <- catMaybes <$> mapM (`findAudio` song) fileTrks
+    sheets <- fmap concat $ forM fileTrks $ \trk -> if trackTitle trk == Just "Band"
+      then return []
+      else do
+        let Just part = trackTitle trk >>= titleToPart
+            findRows f = do
+              pages <- f trk song
+              Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) pages
+              return $ splitRows trk texs
+        notes <- findRows findNotation
+        tab   <- findRows findTab
+        return $ if null tab
+          then [Sheet (Notation part) notes]
+          else [Sheet (Notation part) notes, Sheet (Tab part) tab]
+    let rows = sheetRows $ head sheets
+    audio <- catMaybes <$> mapM (`findAudio` song) fileTrks
 
     putStrLn $ "Title: " ++ title info
     putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
@@ -154,7 +170,7 @@ main = do
           s' <- editStopped s $ \ss ->
             ss { audioPosn = audioPosn ss + 5 }
           eloop s'
-        Just (KeyPress SDL.SDL_SCANCODE_S) -> do
+        Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> do
           s' <- editStopped s $ \ss ->
             ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 }
           eloop s'
