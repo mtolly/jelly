@@ -10,7 +10,7 @@ import           Control.Monad           (forM, forM_, unless, when)
 import           Control.Monad.Fix       (fix)
 import           Data.Char               (toLower)
 import           Data.Conduit            (($$), (=$=))
-import           Data.List               (transpose)
+import           Data.List               (intercalate, transpose)
 import           Data.Maybe              (fromJust)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
@@ -67,6 +67,7 @@ main = do
         return $ if null tab
           then [Sheet (Notation part) notes]
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
+    Right divider <- Image.imgLoadTexture rend "img/divider.png"
     audio <- forM fileTrks $ \trk -> do
       let Just part = trackTitle trk >>= \t -> titleToAudioPart t $ instrument info
       Just aud <- findAudio trk song
@@ -83,9 +84,7 @@ main = do
         [x, "no_" ++ x]
     let getButton str = fromJust $ lookup str buttons
 
-    putStrLn $ "Title: " ++ title info
-    putStrLn $ "Sheet: " ++ show (map sheetPart sheets)
-    putStrLn $ "Audio: " ++ show (map audioPart audio)
+    putStrLn $ "Loaded: " ++ title info ++ " (" ++ show (instrument info) ++ ")"
 
     let hnds = map audioHandle audio
     srcs <- AL.genObjectNames $ length hnds * 2
@@ -144,7 +143,10 @@ main = do
           Playing playstate -> updatePosition playstate
         let rowN = rowNumber bts pn
             sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
-            sheetStream = concat $ concat $ transpose $ map (drop rowN . sheetRows) sheetsToDraw
+            sheetStream = case sheetsToDraw of
+              [sheet] -> concat $ drop rowN $ sheetRows sheet
+              _ -> concat $ intercalate [[(divider, SDL.Rect 0 0 724 2)]] $
+                transpose $ map (drop rowN . sheetRows) sheetsToDraw
             sheetButtons = map
               — do
                 \(sheet, isShown) -> (++)
