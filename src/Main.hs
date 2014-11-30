@@ -8,8 +8,10 @@ import           Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar)
 import           Control.Exception       (bracket, bracket_)
 import           Control.Monad           (forM, forM_, unless, when)
 import           Control.Monad.Fix       (fix)
+import           Data.Char               (toLower)
 import           Data.Conduit            (($$), (=$=))
 import           Data.List               (transpose)
+import           Data.Maybe              (fromJust)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
 import           Foreign.C               (CInt, peekCString, withCString)
@@ -19,6 +21,7 @@ import qualified Sound.File.Sndfile      as Snd
 import           Sound.OpenAL            (($=))
 import qualified Sound.OpenAL            as AL
 import           System.Environment      (getArgs, getProgName)
+import           System.FilePath         ((<.>), (</>))
 
 import           Audio
 import           Jammit
@@ -69,6 +72,16 @@ main = do
       Just aud <- findAudio trk song
       hnd <- Snd.openFile aud Snd.ReadMode Snd.defaultInfo
       return $ Audio part hnd
+
+    buttons <- mapM
+      — do
+        \btn -> do
+          Right tex <- Image.imgLoadTexture rend $ "img" </> btn <.> "png"
+          return (btn, tex)
+      — do
+        x <- words "band guitar1 guitar1tab guitar2 guitar2tab bass basstab drums keys1 keys2 piano synth vocal bvocals"
+        [x, "no_" ++ x]
+    let getButton str = fromJust $ lookup str buttons
 
     putStrLn $ "Title: " ++ title info
     putStrLn $ "Sheet: " ++ show (map sheetPart sheets)
@@ -132,8 +145,28 @@ main = do
         let rowN = rowNumber bts pn
             sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
             sheetStream = concat $ concat $ transpose $ map (drop rowN . sheetRows) sheetsToDraw
+            sheetButtons = map
+              — do
+                \(sheet, isShown) -> (++)
+                  — do if isShown then "" else "no_"
+                  — case sheetPart sheet of
+                    Notation p -> partToFile p
+                    Tab p -> partToFile p ++ "tab"
+              — do zip sheets $ sheetShow $ getStopState s
+            audioButtons = map
+              — do
+                \(aud, gain) -> (++)
+                  — do if gain /= 0 then "" else "no_"
+                  — case audioPart aud of
+                    Only p -> partToFile p
+                    Without _ -> "band"
+              — do zip audio $ audioGains $ getStopState s
+            partToFile = map toLower . drop 4 . show
+            buttonRect = SDL.Rect 0 0 100 30
         zero $ SDL.renderClear rend
-        renderVertSeq rend sheetStream (0, 0)
+        renderHorizSeq rend [ (getButton b, buttonRect) | b <- sheetButtons ] (0, 0)
+        renderHorizSeq rend [ (getButton b, buttonRect) | b <- audioButtons ] (0, 30)
+        renderVertSeq rend sheetStream (0, 60)
         SDL.renderPresent rend
     let
       editStopped s statef = case s of

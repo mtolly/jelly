@@ -2,6 +2,35 @@ name: jelly
 version: 0.1
 build-type: Simple
 cabal-version: >= 1.10
+extra-source-files:
+  img/band.png
+  img/bass.png
+  img/basstab.png
+  img/bvocals.png
+  img/drums.png
+  img/guitar1.png
+  img/guitar1tab.png
+  img/guitar2.png
+  img/guitar2tab.png
+  img/keys1.png
+  img/keys2.png
+  img/no_band.png
+  img/no_bass.png
+  img/no_basstab.png
+  img/no_bvocals.png
+  img/no_drums.png
+  img/no_guitar1.png
+  img/no_guitar1tab.png
+  img/no_guitar2.png
+  img/no_guitar2tab.png
+  img/no_keys1.png
+  img/no_keys2.png
+  img/no_piano.png
+  img/no_synth.png
+  img/no_vocal.png
+  img/piano.png
+  img/synth.png
+  img/vocal.png
 
 executable jelly
   hs-source-dirs: src
