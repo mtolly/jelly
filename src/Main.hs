@@ -10,7 +10,6 @@ import           Control.Monad           (forM, forM_, unless, when)
 import           Control.Monad.Fix       (fix)
 import           Data.Conduit            (($$), (=$=))
 import           Data.List               (transpose)
-import           Data.Maybe              (catMaybes)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
 import           Foreign.C               (CInt, peekCString, withCString)
@@ -27,6 +26,11 @@ import           Jammit
 data Sheet = Sheet
   { sheetPart :: SheetPart
   , sheetRows :: [[(SDL.Texture, SDL.Rect)]]
+  }
+
+data Audio = Audio
+  { audioPart   :: AudioPart
+  , audioHandle :: Snd.Handle
   }
 
 main :: IO ()
@@ -60,13 +64,17 @@ main = do
         return $ if null tab
           then [Sheet (Notation part) notes]
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
-    audio <- catMaybes <$> mapM (`findAudio` song) fileTrks
+    audio <- forM fileTrks $ \trk -> do
+      let Just part = trackTitle trk >>= \t -> titleToAudioPart t $ instrument info
+      Just aud <- findAudio trk song
+      hnd <- Snd.openFile aud Snd.ReadMode Snd.defaultInfo
+      return $ Audio part hnd
 
     putStrLn $ "Title: " ++ title info
-    putStrLn $ "Tracks: " ++ show (map trackTitle fileTrks)
+    putStrLn $ "Sheet: " ++ show (map sheetPart sheets)
+    putStrLn $ "Audio: " ++ show (map audioPart audio)
 
-    hnds <- forM audio $ \a ->
-      Snd.openFile a Snd.ReadMode Snd.defaultInfo
+    let hnds = map audioHandle audio
     srcs <- AL.genObjectNames $ length hnds * 2
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src $= AL.Vertex3 x 0 0
@@ -125,7 +133,7 @@ main = do
             sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
             sheetStream = concat $ concat $ transpose $ map (drop rowN . sheetRows) sheetsToDraw
         zero $ SDL.renderClear rend
-        renderRow rend sheetStream (0, 0)
+        renderVertSeq rend sheetStream (0, 0)
         SDL.renderPresent rend
     let
       editStopped s statef = case s of
@@ -301,9 +309,9 @@ pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
 
 -- | Renders a sequence of images at 1:1 aspect ratio in a vertical sequence.
 -- Stops rendering images once they go below the window's bottom edge.
-renderRow :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
-renderRow _    []              _      = return ()
-renderRow rend ((t, r) : rest) (x, y) = do
+renderVertSeq :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
+renderVertSeq _    []              _      = return ()
+renderVertSeq rend ((t, r) : rest) (x, y) = do
   h <- alloca $ \ph -> do
     zero $ SDL.getRendererOutputSize rend nullPtr ph
     peek ph
@@ -312,7 +320,22 @@ renderRow rend ((t, r) : rest) (x, y) = do
       poke p0 r
       poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
       zero $ SDL.renderCopy rend t p0 p1
-    renderRow rend rest (x, y + SDL.rectH r)
+    renderVertSeq rend rest (x, y + SDL.rectH r)
+
+-- | Renders a sequence of images at 1:1 aspect ratio in a horizontal sequence.
+-- Stops rendering images once they go past the window's right edge.
+renderHorizSeq :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
+renderHorizSeq _    []              _      = return ()
+renderHorizSeq rend ((t, r) : rest) (x, y) = do
+  w <- alloca $ \pw -> do
+    zero $ SDL.getRendererOutputSize rend pw nullPtr
+    peek pw
+  when (x < w) $ do
+    alloca $ \p0 -> alloca $ \p1 -> do
+      poke p0 r
+      poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
+      zero $ SDL.renderCopy rend t p0 p1
+    renderHorizSeq rend rest (x + SDL.rectW r, y)
 
 -- | Splits sheet music images into a list of rows, where each row is a
 -- sequence of texture sections to be rendered in a vertical requence.
