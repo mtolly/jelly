@@ -2,7 +2,7 @@ name: jelly
 version: 0.1
 build-type: Simple
 cabal-version: >= 1.10
-extra-source-files:
+data-files:
   img/*.png
 
 executable jelly
@@ -11,6 +11,7 @@ executable jelly
   other-modules:
     Audio
     Jammit
+    Paths_jelly
   default-language: Haskell2010
   ghc-options: -Wall -threaded
   build-depends:

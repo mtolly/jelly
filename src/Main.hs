@@ -24,6 +24,7 @@ import           System.FilePath         ((<.>), (</>))
 
 import           Audio
 import           Jammit
+import           Paths_jelly             (getDataFileName)
 
 data Sheet = Sheet
   { sheetPart :: SheetPart
@@ -78,7 +79,8 @@ main = do
         simpleImages = words "play stop divider left right"
         allImages = simpleImages ++ toggleImages ++ map ("no_" ++) toggleImages
     images <- forM allImages $ \img -> do
-      Right tex <- Image.imgLoadTexture rend $ "img" </> img <.> "png"
+      dataLoc <- getDataFileName $ "img" </> img <.> "png"
+      Right tex <- Image.imgLoadTexture rend dataLoc
       return (img, tex)
     let getImage str = case lookup str images of
           Just img -> img
