@@ -11,7 +11,6 @@ import           Control.Monad.Fix       (fix)
 import           Data.Char               (toLower)
 import           Data.Conduit            (($$), (=$=))
 import           Data.List               (intercalate, transpose)
-import           Data.Maybe              (fromJust)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
 import           Foreign.C               (CInt, peekCString, withCString)
@@ -67,22 +66,23 @@ main = do
         return $ if null tab
           then [Sheet (Notation part) notes]
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
-    Right divider <- Image.imgLoadTexture rend "img/divider.png"
     audio <- forM fileTrks $ \trk -> do
       let Just part = trackTitle trk >>= \t -> titleToAudioPart t $ instrument info
       Just aud <- findAudio trk song
       hnd <- Snd.openFile aud Snd.ReadMode Snd.defaultInfo
       return $ Audio part hnd
 
-    buttons <- mapM
-      — do
-        \btn -> do
-          Right tex <- Image.imgLoadTexture rend $ "img" </> btn <.> "png"
-          return (btn, tex)
-      — do
-        x <- words "band guitar1 guitar1tab guitar2 guitar2tab bass basstab drums keys1 keys2 piano synth vocal bvocals"
-        [x, "no_" ++ x]
-    let getButton str = fromJust $ lookup str buttons
+    let toggleImages = (++)
+          — map (map toLower . drop 4 . show) ([minBound .. maxBound] :: [Part])
+          — words "band guitar1tab guitar2tab basstab slow"
+        simpleImages = words "play stop divider left right"
+        allImages = simpleImages ++ toggleImages ++ map ("no_" ++) toggleImages
+    images <- forM allImages $ \img -> do
+      Right tex <- Image.imgLoadTexture rend $ "img" </> img <.> "png"
+      return (img, tex)
+    let getImage str = case lookup str images of
+          Just img -> img
+          Nothing  -> error $ "Couldn't find image: " ++ show str
 
     putStrLn $ "Loaded: " ++ title info ++ " (" ++ show (instrument info) ++ ")"
 
@@ -145,7 +145,7 @@ main = do
             sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
             sheetStream = case sheetsToDraw of
               [sheet] -> concat $ drop rowN $ sheetRows sheet
-              _ -> concat $ intercalate [[(divider, SDL.Rect 0 0 724 2)]] $
+              _ -> concat $ intercalate [[(getImage "divider", SDL.Rect 0 0 724 2)]] $
                 transpose $ map (drop rowN . sheetRows) sheetsToDraw
             sheetButtons = map
               — do
@@ -165,9 +165,21 @@ main = do
               — do zip audio $ audioGains $ getStopState s
             partToFile = map toLower . drop 4 . show
             buttonRect = SDL.Rect 0 0 100 30
+            largeBtnRect = SDL.Rect 0 0 80 60
+            thinLargeBtnRect = SDL.Rect 0 0 40 60
         zero $ SDL.renderClear rend
-        renderHorizSeq rend [ (getButton b, buttonRect) | b <- sheetButtons ] (0, 0)
-        renderHorizSeq rend [ (getButton b, buttonRect) | b <- audioButtons ] (0, 30)
+        renderHorizSeq rend
+          [ case s of
+            Stopped _ -> (getImage "play", largeBtnRect)
+            Playing _ -> (getImage "stop", largeBtnRect)
+          , (getImage "left", thinLargeBtnRect)
+          , (getImage "right", thinLargeBtnRect)
+          , case playSpeed $ getStopState s of
+            1 -> (getImage "no_slow", largeBtnRect)
+            _ -> (getImage "slow"   , largeBtnRect)
+          ] (0, 0)
+        renderHorizSeq rend [ (getImage b, buttonRect) | b <- sheetButtons ] (240, 0)
+        renderHorizSeq rend [ (getImage b, buttonRect) | b <- audioButtons ] (240, 30)
         renderVertSeq rend sheetStream (0, 60)
         SDL.renderPresent rend
     let
@@ -207,21 +219,10 @@ main = do
             peek ph
           SDL.setWindowSize window sheetWidth height
           eloop s
-        Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> case s of
-          Playing ps -> stop ps >>= eloop . Stopped
-          Stopped ss -> start ss >>= eloop . Playing
-        Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> do
-          s' <- editStopped s $ \ss ->
-            ss { audioPosn = max 0 $ audioPosn ss - 5 }
-          eloop s'
-        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> do
-          s' <- editStopped s $ \ss ->
-            ss { audioPosn = audioPosn ss + 5 }
-          eloop s'
-        Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> do
-          s' <- editStopped s $ \ss ->
-            ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 }
-          eloop s'
+        Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> togglePlaying
+        Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> moveLeft
+        Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> moveRight
+        Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> toggleSpeed
         Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
@@ -235,12 +236,32 @@ main = do
           , SDL.mouseButtonEventX = mx
           , SDL.mouseButtonEventY = my
           })
-          | 0  <= my && my < 30 ->
-            eloop $ toggleSheet (fromIntegral $ div mx 100) s
-          | 30 <= my && my < 60 ->
-            toggleVolume (fromIntegral $ div mx 100) s >>= eloop
+          | (mx, my) `insideRect` SDL.Rect 0 0 80 60 -> togglePlaying
+          | (mx, my) `insideRect` SDL.Rect 80 0 40 60 -> moveLeft
+          | (mx, my) `insideRect` SDL.Rect 120 0 40 60 -> moveRight
+          | (mx, my) `insideRect` SDL.Rect 160 0 80 60 -> toggleSpeed
+          | (mx, my) `insideRect` SDL.Rect 240 0 9999 30 ->
+            eloop $ toggleSheet (fromIntegral $ div (mx - 240) 100) s
+          | (mx, my) `insideRect` SDL.Rect 240 30 9999 30 ->
+            toggleVolume (fromIntegral $ div (mx - 240) 100) s >>= eloop
         Just _  -> eloop s
         Nothing -> loop  s
+        where moveLeft = do
+                s' <- editStopped s $ \ss ->
+                  ss { audioPosn = max 0 $ audioPosn ss - 5 }
+                eloop s'
+              moveRight = do
+                s' <- editStopped s $ \ss ->
+                  ss { audioPosn = audioPosn ss + 5 }
+                eloop s'
+              toggleSpeed = do
+                s' <- editStopped s $ \ss ->
+                  ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 }
+                eloop s'
+              togglePlaying = case s of
+                Playing ps -> stop  ps >>= eloop . Stopped
+                Stopped ss -> start ss >>= eloop . Playing
+
 
     loop $ Stopped StopState
       { audioPosn  = 0
@@ -248,6 +269,15 @@ main = do
       , audioGains = map (const 1) hnds
       , sheetShow  = zipWith const (True : repeat False) sheets
       }
+
+insideRect :: (Integral a) => (a, a) -> SDL.Rect -> Bool
+(x, y) `insideRect` (SDL.Rect rx ry w h) = and
+  [ rx <= xi
+  , xi < rx + w
+  , ry < yi
+  , yi < ry + h
+  ] where xi = fromIntegral x
+          yi = fromIntegral y
 
 -- | The number of blocks that audio sources should be filled up to.
 sinkQueueSize :: (Integral a) => a
