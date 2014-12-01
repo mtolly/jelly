@@ -5,6 +5,10 @@ cabal-version: >= 1.10
 data-files:
   img/*.png
 
+flag MacApp
+  description: Build an executable intended for a Mac OS X .app bundle
+  default: False
+
 executable jelly
   hs-source-dirs: src
   main-is: Main.hs
@@ -29,3 +33,9 @@ executable jelly
     , rubberband
     , conduit
     , transformers
+  if flag(MacApp)
+    cpp-options: -DMACAPP
+    build-depends: FindBin
+    c-sources: picker.m
+    frameworks: Cocoa
+    cc-options: -Wall -Wextra -Wshadow

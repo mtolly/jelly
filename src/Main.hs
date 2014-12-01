@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE CPP             #-}
 module Main (main) where
 
 import           Control.Applicative     ((<$>))
@@ -19,12 +20,35 @@ import qualified Graphics.UI.SDL.Image   as Image
 import qualified Sound.File.Sndfile      as Snd
 import           Sound.OpenAL            (($=))
 import qualified Sound.OpenAL            as AL
-import           System.Environment      (getArgs, getProgName)
 import           System.FilePath         ((<.>), (</>))
 
 import           Audio
 import           Jammit
-import           Paths_jelly             (getDataFileName)
+
+#ifndef MACAPP
+import Paths_jelly (getDataFileName)
+import System.Environment (getArgs, getProgName)
+#else
+import Foreign (free)
+import Foreign.C (CString)
+import System.Environment.FindBin (getProgPath)
+
+getDataFileName :: FilePath -> IO FilePath
+getDataFileName f = getProgPath >>= \d ->
+  return $ d </> "../Resources" </> f
+
+foreign import ccall unsafe
+  "macSelectDir"
+  c_macSelectDir :: IO CString
+
+macSelectDir :: IO (Maybe FilePath)
+macSelectDir = c_macSelectDir >>= \p -> if p == nullPtr
+  then return Nothing
+  else do
+    s <- peekCString p
+    free p
+    return $ Just s
+#endif
 
 data Sheet = Sheet
   { sheetPart :: SheetPart
@@ -39,9 +63,15 @@ data Audio = Audio
 main :: IO ()
 main = do
 
+#ifdef MACAPP
+  song <- macSelectDir >>= \case
+    Nothing   -> error "No song folder selected; quitting app."
+    Just song -> return song
+#else
   song <- getArgs >>= \case
     [song] -> return song
     _      -> getProgName >>= \pn -> error $ "Usage: "++pn++" song-folder"
+#endif
 
   withALContext
     $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
