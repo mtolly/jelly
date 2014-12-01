@@ -39,15 +39,20 @@ getDataFileName f = getProgPath >>= \d ->
 
 foreign import ccall unsafe
   "macSelectDir"
-  c_macSelectDir :: IO CString
+  c_macSelectDir :: CString -> IO CString
 
 macSelectDir :: IO (Maybe FilePath)
-macSelectDir = c_macSelectDir >>= \p -> if p == nullPtr
-  then return Nothing
-  else do
-    s <- peekCString p
-    free p
-    return $ Just s
+macSelectDir = do
+  jmt <- findJammitDir
+  p <- case jmt of
+    Nothing -> c_macSelectDir nullPtr
+    Just d  -> withCString d c_macSelectDir
+  if p == nullPtr
+    then return Nothing
+    else do
+      s <- peekCString p
+      free p
+      return $ Just s
 #endif
 
 data Sheet = Sheet

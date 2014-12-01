@@ -311,6 +311,22 @@ loadSections :: FilePath -> IO (Maybe [Section])
 loadSections dir = PL.listFromPropertyList <$>
   readXmlPropertyListFromFile' (dir </> "sections.plist")
 
+{-
+Known section types
+=== in Erotomania ===
+0 pre-song
+1 intro
+2 verse
+4 chorus
+7 outro
+9 post-song
+13 b-section
+17 interlude
+23 c-section
+25 guitar solo
+36 transition
+-}
+
 findImages :: String -> Track -> FilePath -> IO [FilePath]
 findImages suffix trk dir = do
   files <- Dir.getDirectoryContents dir

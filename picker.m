@@ -1,12 +1,17 @@
 #import <Cocoa/Cocoa.h>
 
-const char *macSelectDir() {
+const char *macSelectDir(char *startIn) {
   NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 
   NSOpenPanel *panel = [NSOpenPanel openPanel];
   [panel setCanChooseFiles:NO];
   [panel setCanChooseDirectories:YES];
   [panel setAllowsMultipleSelection:NO];
+
+  if (startIn) {
+    NSString *str = [[NSString alloc] initWithUTF8String: startIn];
+    [panel setDirectoryURL:[NSURL fileURLWithPath:str]];
+  }
 
   NSInteger clicked = [panel runModal];
 
