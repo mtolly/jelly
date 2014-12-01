@@ -1,3 +1,6 @@
+build:
+	cabal configure && cabal build
+
 app:
 	cabal configure --flags MacApp \
 	&& cabal build \

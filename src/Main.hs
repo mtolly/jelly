@@ -241,9 +241,7 @@ main = do
         threadDelay 16000 -- ehhh, fix this later
         eloop s
       eloop s = pollEvent >>= \case
-        Just (SDL.QuitEvent {}) -> case s of
-          Playing ps -> stop ps >> return ()
-          Stopped _  -> return ()
+        Just (SDL.QuitEvent {}) -> quit
         Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
           -- Let user adjust height, but reset width to sheetWidth
           height <- alloca $ \pw -> alloca $ \ph -> do
@@ -276,6 +274,20 @@ main = do
             eloop $ toggleSheet (fromIntegral $ div (mx - 240) 100) s
           | (mx, my) `insideRect` SDL.Rect 240 30 9999 30 ->
             toggleVolume (fromIntegral $ div (mx - 240) 100) s >>= eloop
+#ifdef MACAPP
+        -- This should get handled automatically by SDL,
+        -- but for some reason it breaks in .app mode
+        -- so we have to handle it manually.
+        Just SDL.KeyboardEvent
+          { SDL.eventType           = SDL.SDL_KEYDOWN
+          , SDL.keyboardEventRepeat = 0
+          , SDL.keyboardEventKeysym = SDL.Keysym
+            { SDL.keysymScancode = SDL.SDL_SCANCODE_Q
+            , SDL.keysymMod      = keymod
+            }
+          } | keymod `elem` [SDL.KMOD_LGUI, SDL.KMOD_RGUI]
+          -> quit
+#endif
         Just _  -> eloop s
         Nothing -> loop  s
         where moveLeft = do
@@ -293,6 +305,9 @@ main = do
               togglePlaying = case s of
                 Playing ps -> stop  ps >>= eloop . Stopped
                 Stopped ss -> start ss >>= eloop . Playing
+              quit = case s of
+                Playing ps -> stop ps >> return ()
+                Stopped _  -> return ()
 
 
     loop $ Stopped StopState
