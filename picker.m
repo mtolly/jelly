@@ -1,8 +1,6 @@
 #import <Cocoa/Cocoa.h>
 
 const char *macSelectDir(char *startIn) {
-  NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-
   NSOpenPanel *panel = [NSOpenPanel openPanel];
   [panel setCanChooseFiles:NO];
   [panel setCanChooseDirectories:YES];
@@ -11,6 +9,7 @@ const char *macSelectDir(char *startIn) {
   if (startIn) {
     NSString *str = [[NSString alloc] initWithUTF8String: startIn];
     [panel setDirectoryURL:[NSURL fileURLWithPath:str]];
+    [str release];
   }
 
   NSInteger clicked = [panel runModal];
@@ -28,6 +27,6 @@ const char *macSelectDir(char *startIn) {
     strcpy(copied, original);
   }
 
-  [pool drain];
+  [panel release];
   return copied;
 }
