@@ -18,6 +18,8 @@ import           Sound.OpenAL                     (($=))
 import qualified Sound.OpenAL                     as AL
 import qualified Sound.RubberBand                 as RB
 
+import Control.Monad.Trans.Resource
+
 -- | Given a vector with interleaved samples, like @[L0, R0, L1, R1, ...]@,
 -- converts it into @[[L0, L1, ...], [R0, R1, ...]]@.
 deinterleave :: (V.Storable a)
@@ -33,14 +35,25 @@ deinterleave n v = do
 maxBlockSize :: Int
 maxBlockSize = 5000
 
--- | Loads sample blocks from the given audio files.
--- Seek the handles beforehand to load from a certain point in the file.
-load :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
-  [Snd.Handle] -> C.Source IO [V.Vector e]
-load = C.mapOutput concat . C.sequenceSources . map loadOne
+(—) :: (a -> b) -> a -> b
+(—) = ($)
+infixl 0 —
 
-loadOne :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
-  Snd.Handle -> C.Source IO [V.Vector e]
+load :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
+  Int -> [FilePath] -> C.Source (ResourceT IO) [V.Vector e]
+load pos = C.mapOutput concat . C.sequenceSources . map (loadOne' pos)
+
+loadOne' :: (Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
+  Int -> FilePath -> C.Source (ResourceT IO) [V.Vector e]
+loadOne' pos f = C.bracketP
+  — Snd.openFile f Snd.ReadMode Snd.defaultInfo
+  — Snd.hClose
+  — \h -> do
+    _ <- liftIO $ Snd.hSeek h Snd.AbsoluteSeek pos
+    loadOne h
+
+loadOne :: (MonadIO m, Snd.Sample e, V.Storable e, Snd.Buffer SndV.Buffer e) =>
+  Snd.Handle -> C.Source m [V.Vector e]
 loadOne h = let
   chans = Snd.channels $ Snd.hInfo h
   in fix $ \loop -> liftIO (Snd.hGetBuffer h maxBlockSize) >>= \case
@@ -63,8 +76,9 @@ breakBlock maxSize chans = if V.length (head chans) <= maxSize
 shortWait :: (MonadIO m) => m ()
 shortWait = liftIO $ threadDelay 1000
 
-stretch :: RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
-  -> C.Conduit [V.Vector Float] IO [V.Vector Float]
+stretch :: (MonadIO m)
+  => RB.SampleRate -> RB.NumChannels -> RB.TimeRatio -> RB.PitchScale
+  -> C.Conduit [V.Vector Float] m [V.Vector Float]
 stretch a b c d = do
   let opts = RB.defaultOptions { RB.oProcess = RB.RealTime }
   s <- liftIO $ RB.new a b opts c d
@@ -97,11 +111,11 @@ makeBuffer v = do
   return buf
 
 -- | Continually feeds the OpenAL sources with sample blocks from upstream.
-supply
-  :: [AL.Source]
+supply :: (MonadIO m)
+  => [AL.Source]
   -> Int -- ^ Sources will be supplied if they have less than this many blocks.
   -> MVar () -- ^ To stop the pipeline, place () in here, and wait until empty.
-  -> C.Sink [V.Vector Int16] IO ()
+  -> C.Sink [V.Vector Int16] m ()
 supply srcs n mvar = fix $ \loop -> do
   -- Check if pipeline has been requested to stop
   mval <- liftIO $ tryTakeMVar mvar

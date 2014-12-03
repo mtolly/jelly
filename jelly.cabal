@@ -33,6 +33,7 @@ executable jelly
     , rubberband
     , conduit
     , transformers
+    , resourcet
   if flag(MacApp)
     cpp-options: -DMACAPP
     build-depends: FindBin

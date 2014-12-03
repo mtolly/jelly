@@ -17,13 +17,14 @@ import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
 import           Foreign.C               (CInt, peekCString, withCString)
 import qualified Graphics.UI.SDL         as SDL
 import qualified Graphics.UI.SDL.Image   as Image
-import qualified Sound.File.Sndfile      as Snd
 import           Sound.OpenAL            (($=))
 import qualified Sound.OpenAL            as AL
 import           System.FilePath         ((<.>), (</>))
 
 import           Audio
 import           Jammit
+
+import Control.Monad.Trans.Resource
 
 #ifndef MACAPP
 import Paths_jelly (getDataFileName)
@@ -62,7 +63,7 @@ data Sheet = Sheet
 
 data Audio = Audio
   { audioPart   :: AudioPart
-  , audioHandle :: Snd.Handle
+  , audioHandle :: FilePath
   }
 
 main :: IO ()
@@ -105,8 +106,7 @@ main = do
     audio <- forM fileTrks $ \trk -> do
       let Just part = trackTitle trk >>= \t -> titleToAudioPart t $ instrument info
       Just aud <- findAudio trk song
-      hnd <- Snd.openFile aud Snd.ReadMode Snd.defaultInfo
-      return $ Audio part hnd
+      return $ Audio part aud
 
     let toggleImages = (++)
           — map (map toLower . drop 4 . show) ([minBound .. maxBound] :: [Part])
@@ -123,8 +123,8 @@ main = do
 
     putStrLn $ "Loaded: " ++ title info ++ " (" ++ show (instrument info) ++ ")"
 
-    let hnds = map audioHandle audio
-    srcs <- AL.genObjectNames $ length hnds * 2
+    let auds = map audioHandle audio
+    srcs <- AL.genObjectNames $ length auds * 2
     forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
       AL.sourcePosition src $= AL.Vertex3 x 0 0
 
@@ -138,18 +138,17 @@ main = do
       isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
       start ss = do
         -- Seek all the audio handles to our saved position
-        forM_ hnds $ \hnd -> Snd.hSeek hnd Snd.AbsoluteSeek $ round $
-          audioPosn ss * fromIntegral (Snd.samplerate $ Snd.hInfo hnd)
+        let pos = round $ audioPosn ss * 44100
         -- Start the audio conduit, and wait for it to fill the queues
         mvar <- newEmptyMVar
         let sink = supply srcs sinkQueueSize mvar
-            pipeline 1 = load hnds $$ sink
+            pipeline 1 = load pos auds $$ sink
             pipeline speed
-              =   load hnds
+              =   load pos auds
               $$  stretch 44100 (length srcs) speed 1
               =$= convert
               =$= sink
-        _ <- forkIO $ pipeline $ playSpeed ss
+        _ <- forkIO $ runResourceT $ pipeline $ playSpeed ss
         fix $ \loop -> isFull >>= \full -> unless full loop
         -- Mark the sdl ticks when we started audio
         starttks <- fromIntegral <$> SDL.getTicks
@@ -318,7 +317,7 @@ main = do
     loop $ Stopped StopState
       { audioPosn  = 0
       , playSpeed  = 1
-      , audioGains = map (const 1) hnds
+      , audioGains = map (const 1) auds
       , sheetShow  = zipWith const (True : repeat False) sheets
       }
 
