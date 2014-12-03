@@ -3,12 +3,12 @@
 module Audio (load, stretch, convert, supply) where
 
 import           Control.Concurrent               (threadDelay)
-import           Control.Concurrent.MVar          (MVar, tryTakeMVar)
-import           Control.Monad                    (forM_, when)
+import           Control.Monad                    (forM, forM_, when)
 import           Control.Monad.Fix                (fix)
 import           Control.Monad.IO.Class           (MonadIO, liftIO)
 import qualified Data.Conduit                     as C
 import qualified Data.Conduit.List                as CL
+import           Data.Functor                     (void)
 import           Data.Int                         (Int16)
 import qualified Data.Vector.Storable             as V
 import           Foreign.Storable                 (sizeOf)
@@ -110,32 +110,51 @@ makeBuffer v = do
     AL.bufferData buf $= AL.BufferData mem AL.Mono16 44100
   return buf
 
--- | Continually feeds the OpenAL sources with sample blocks from upstream.
-supply :: (MonadIO m)
-  => [AL.Source]
-  -> Int -- ^ Sources will be supplied if they have less than this many blocks.
-  -> MVar () -- ^ To stop the pipeline, place () in here, and wait until empty.
-  -> C.Sink [V.Vector Int16] m ()
-supply srcs n mvar = fix $ \loop -> do
-  -- Check if pipeline has been requested to stop
-  mval <- liftIO $ tryTakeMVar mvar
-  case mval of
-    Just () -> return () -- done!
-    Nothing -> do
-      -- First, check if old buffers need to be removed
-      pr <- liftIO $ fmap minimum $ mapM (AL.get . AL.buffersProcessed) srcs
-      when (pr /= 0) $ liftIO $ forM_ srcs $ \src ->
-        AL.unqueueBuffers src pr >>= AL.deleteObjectNames
-      -- Then, check if we need to add new buffers
-      qu <- liftIO $ fmap (fromIntegral . minimum) $ mapM (AL.get . AL.buffersQueued) srcs
-      if qu >= n
-        then shortWait >> loop
-        else C.await >>= \case
-          -- If there are still queued buffers but no more input,
-          -- we must loop more to dequeue the remaining buffers.
-          Nothing -> when (qu /= 0) $ shortWait >> loop
-          Just vs -> do
-            forM_ (zip srcs vs) $ \(src, v) -> do
-              buf <- liftIO $ makeBuffer v
-              liftIO $ AL.queueBuffers src [buf]
-            loop
+supply
+  :: [AL.Vertex3 AL.ALfloat]
+  -> [AL.Gain]
+  -> C.Sink [V.Vector Int16] (ResourceT IO) ()
+supply ps gs = void $ C.sequenceSinks $ do
+  (p, g, i) <- zip3 ps gs [0..]
+  return $ C.mapInput (!! i) (const Nothing) $ supplyOne p g
+
+supplyOne
+  :: AL.Vertex3 AL.ALfloat
+  -> AL.Gain
+  -> C.Sink (V.Vector Int16) (ResourceT IO) ()
+supplyOne pos g = C.bracketP
+  — AL.genObjectName
+  — do
+    \src -> do
+      AL.rewind [src]
+      _ <- clearQueue src
+      return ()
+  — \src -> do
+    liftIO $ AL.sourcePosition src $= pos
+    liftIO $ AL.sourceGain src $= g
+    let loop q = do
+          p <- liftIO $ clearQueue src
+          let q' = q - p
+          if q' >= 2 * 44100
+            then shortWait >> loop q'
+            else C.await >>= \case
+              Nothing -> return ()
+              Just v -> do
+                buf <- liftIO $ makeBuffer v
+                let q'' = q' + V.length v
+                liftIO $ AL.queueBuffers src [buf]
+                when (q'' >= 44100) $ do
+                  liftIO $ AL.get (AL.sourceState src) >>= \case
+                    AL.Playing -> return ()
+                    _          -> AL.play [src]
+                loop q''
+    loop 0
+  where clearQueue :: AL.Source -> IO Int
+        clearQueue src = do
+          bufs <- AL.get (AL.buffersProcessed src) >>= AL.unqueueBuffers src
+          len <- fmap (fromIntegral . sum) $ forM bufs $ \buf -> do
+            AL.BufferData (AL.MemoryRegion _ size) _ _
+              <- AL.get $ AL.bufferData buf
+            return $ size `quot` 2
+          AL.deleteObjectNames bufs
+          return len

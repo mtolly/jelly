@@ -4,11 +4,9 @@
 module Main (main) where
 
 import           Control.Applicative     ((<$>))
-import           Control.Concurrent      (forkIO, threadDelay)
-import           Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar)
+import           Control.Concurrent      (forkIO, threadDelay, killThread, ThreadId)
 import           Control.Exception       (bracket, bracket_)
-import           Control.Monad           (forM, forM_, unless, when)
-import           Control.Monad.Fix       (fix)
+import           Control.Monad           (forM, unless, when)
 import           Data.Char               (toLower)
 import           Data.Conduit            (($$), (=$=))
 import           Data.List               (intercalate, transpose)
@@ -124,9 +122,9 @@ main = do
     putStrLn $ "Loaded: " ++ title info ++ " (" ++ show (instrument info) ++ ")"
 
     let auds = map audioHandle audio
-    srcs <- AL.genObjectNames $ length auds * 2
-    forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
-      AL.sourcePosition src $= AL.Vertex3 x 0 0
+    -- srcs <- AL.genObjectNames $ length auds * 2
+    -- forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
+    --   AL.sourcePosition src $= AL.Vertex3 x 0 0
 
     let
       updatePosition ps = do
@@ -135,42 +133,34 @@ main = do
         let diffSeconds = fromIntegral (tend - startTicks ps) / 1000
         return $ audioPosn ss + diffSeconds / playSpeed ss
     let
-      isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
+      -- isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
       start ss = do
         -- Seek all the audio handles to our saved position
         let pos = round $ audioPosn ss * 44100
         -- Start the audio conduit, and wait for it to fill the queues
-        mvar <- newEmptyMVar
-        let sink = supply srcs sinkQueueSize mvar
+        let sink = supply stereoPositions $ do
+              g <- map realToFrac $ audioGains ss
+              [g, g]
             pipeline 1 = load pos auds $$ sink
             pipeline speed
               =   load pos auds
-              $$  stretch 44100 (length srcs) speed 1
+              $$  stretch 44100 (length auds * 2) speed 1
               =$= convert
               =$= sink
-        _ <- forkIO $ runResourceT $ pipeline $ playSpeed ss
-        fix $ \loop -> isFull >>= \full -> unless full loop
+            stereoPositions = cycle [AL.Vertex3 (-1) 0 0, AL.Vertex3 1 0 0]
+        tid <- forkIO $ runResourceT $ pipeline $ playSpeed ss
         -- Mark the sdl ticks when we started audio
         starttks <- fromIntegral <$> SDL.getTicks
-        -- Start audio playback
-        AL.play srcs
         return $ PlayState
           { startTicks  = starttks
-          , audioThread = mvar
+          , audioThread = tid
           , stopState   = ss
           }
     let
       stop ps = do
         newpn <- updatePosition ps
         -- Kill the audio thread
-        putMVar (audioThread ps) () -- signal the thread
-        putMVar (audioThread ps) () -- wait until thread removes the last ()
-        -- Stop audio, clear queues and delete buffers
-        AL.rewind srcs
-        forM_ srcs $ \src
-          ->  AL.get (AL.buffersProcessed src)
-          >>= AL.unqueueBuffers src
-          >>= AL.deleteObjectNames
+        killThread $ audioThread ps
         return $ (stopState ps) { audioPosn = newpn }
     let
       draw s = do
@@ -225,15 +215,10 @@ main = do
           ss <- stop ps
           threadDelay 100000
           fmap Playing $ start $ statef ss
-      toggleVolume i s = do
-        let ss = getStopState s
-            vol = audioGains ss !! i
-            vol' = if vol == 1 then 0 else 1
-            ss' = ss { audioGains = updateNth i vol' $ audioGains ss }
-            s' = setStopState ss' s
-        forM_ (take 2 $ drop (i * 2) srcs) $ \src -> do
-          AL.sourceGain src $= realToFrac vol'
-        return s'
+      toggleVolume i s = editStopped s $ \ss -> let
+        vol = audioGains ss !! i
+        vol' = if vol == 1 then 0 else 1
+        in ss { audioGains = updateNth i vol' $ audioGains ss }
       updateNth i x xs = case splitAt i xs of
         (ys, zs) -> ys ++ [x] ++ drop 1 zs
       flipNth i = zipWith ($) $ updateNth i not $ repeat id
@@ -330,10 +315,6 @@ insideRect :: (Integral a) => (a, a) -> SDL.Rect -> Bool
   ] where xi = fromIntegral x
           yi = fromIntegral y
 
--- | The number of blocks that audio sources should be filled up to.
-sinkQueueSize :: (Integral a) => a
-sinkQueueSize = 10
-
 data StopState = StopState
   { audioPosn  :: Double -- seconds
   , playSpeed  :: Double -- ratio of playback secs to original secs
@@ -343,7 +324,7 @@ data StopState = StopState
 
 data PlayState = PlayState
   { startTicks  :: Int -- sdl ticks
-  , audioThread :: MVar ()
+  , audioThread :: ThreadId
   , stopState   :: StopState
   } deriving (Eq)
 
