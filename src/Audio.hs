@@ -20,6 +20,9 @@ import qualified Sound.RubberBand                 as RB
 
 import Control.Monad.Trans.Resource
 
+import qualified Data.Set as Set
+import Data.IORef
+
 -- | Given a vector with interleaved samples, like @[L0, R0, L1, R1, ...]@,
 -- converts it into @[[L0, L1, ...], [R0, R1, ...]]@.
 deinterleave :: (V.Storable a)
@@ -123,17 +126,36 @@ supplyOne
   -> AL.Gain
   -> C.Sink (V.Vector Int16) (ResourceT IO) ()
 supplyOne pos g = C.bracketP
-  — AL.genObjectName
   — do
-    \src -> do
-      AL.rewind [src]
-      _ <- clearQueue src
-      return ()
-  — \src -> do
+    src <- AL.genObjectName
+    ref <- newIORef Set.empty
+    return (src, ref)
+  — do
+    \(src, ref) -> do
+      AL.stop [src]
+      AL.buffer src $= Nothing
+      bufs <- Set.toList `fmap` readIORef ref
+      let loop = do
+            _ <- AL.get AL.alErrors
+            AL.deleteObjectNames bufs
+            errs <- AL.get AL.alErrors
+            case errs of
+              [] -> return ()
+              _  -> threadDelay 10000 >> loop
+      loop
+  — \(src, ref) -> do
     liftIO $ AL.sourcePosition src $= pos
     liftIO $ AL.sourceGain src $= g
     let loop q = do
-          p <- liftIO $ clearQueue src
+          p <- liftIO $ do
+            bufs <- AL.get (AL.buffersProcessed src) >>= AL.unqueueBuffers src
+            modifyIORef ref $ \s -> Set.difference s $ Set.fromList bufs
+            len <- fmap (fromIntegral . sum) $ forM bufs $ \buf -> do
+              AL.BufferData (AL.MemoryRegion _ size) _ _
+                <- AL.get $ AL.bufferData buf
+              return $ size `quot` 2
+            AL.deleteObjectNames bufs
+            return len
           let q' = q - p
           if q' >= 2 * 44100
             then shortWait >> loop q'
@@ -141,6 +163,7 @@ supplyOne pos g = C.bracketP
               Nothing -> return ()
               Just v -> do
                 buf <- liftIO $ makeBuffer v
+                liftIO $ modifyIORef ref $ Set.insert buf
                 let q'' = q' + V.length v
                 liftIO $ AL.queueBuffers src [buf]
                 when (q'' >= 44100) $ do
@@ -149,12 +172,3 @@ supplyOne pos g = C.bracketP
                     _          -> AL.play [src]
                 loop q''
     loop 0
-  where clearQueue :: AL.Source -> IO Int
-        clearQueue src = do
-          bufs <- AL.get (AL.buffersProcessed src) >>= AL.unqueueBuffers src
-          len <- fmap (fromIntegral . sum) $ forM bufs $ \buf -> do
-            AL.BufferData (AL.MemoryRegion _ size) _ _
-              <- AL.get $ AL.bufferData buf
-            return $ size `quot` 2
-          AL.deleteObjectNames bufs
-          return len
