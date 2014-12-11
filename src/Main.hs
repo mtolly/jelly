@@ -194,7 +194,11 @@ main = do
 
       whileStopped s f = case s of
         Stopped ss -> fmap Stopped $ f ss
-        Playing ps -> fmap Playing $ stop ps >>= f >>= start
+        Playing ps -> fmap Playing $ do
+          ss <- stop ps
+          ps' <- f ss
+          threadDelay 75000
+          start ps'
       toggleVolume i s = let
         ss = getStopState s
         vol = audioGains ss !! i

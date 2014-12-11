@@ -162,6 +162,7 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
               AL.stop sourcesFlat
               forM_ sourcesFlat $ \src ->
                 AL.buffer src $= Nothing
+              AL.rewind sourcesFlat
               writeIORef (full_ pipe) True
               fix $ \loopCleanup -> do
                 _ <- AL.get AL.alErrors
