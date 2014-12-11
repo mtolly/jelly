@@ -3,7 +3,7 @@
 {-# LANGUAGE CPP             #-}
 module Main (main) where
 
-import           Control.Applicative     ((<$>))
+import           Control.Applicative     ((<$>), liftA2)
 import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
 import           Control.Monad           (forM, guard, unless, when)
@@ -238,11 +238,11 @@ main = do
       eloop s = pollEvent >>= \case
         Just (SDL.QuitEvent {}) -> quit
         Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-          -- Let user adjust height, but reset width to sheetWidth
-          height <- alloca $ \pw -> alloca $ \ph -> do
+          -- Let user adjust height, but make width to at least sheetWidth
+          (width, height) <- alloca $ \pw -> alloca $ \ph -> do
             SDL.getWindowSize window pw ph
-            peek ph
-          SDL.setWindowSize window sheetWidth height
+            liftA2 (,) (peek pw) (peek ph)
+          SDL.setWindowSize window (max sheetWidth width) height
           eloop s
         Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> togglePlaying
         Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> moveLeft
