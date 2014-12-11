@@ -57,11 +57,6 @@ data Sheet = Sheet
   , sheetRows :: [[(SDL.Texture, SDL.Rect)]]
   }
 
-data Audio = Audio
-  { audioPart   :: AudioPart
-  , audioHandle :: FilePath
-  }
-
 main :: IO ()
 main = do
 
@@ -114,7 +109,7 @@ main = do
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
     audio <- forM fileTrks $ \(song, apart, trk) -> do
       Just aud <- findAudio trk song
-      return $ Audio apart aud
+      return (apart, aud)
 
     let toggleImages = (++)
           — map (map toLower . drop 4 . show) ([minBound .. maxBound] :: [Part])
@@ -131,8 +126,8 @@ main = do
 
     putStrLn $ "Loaded: " ++ theTitle ++ " " ++ show theInstruments
 
-    let normalAudio = [ (p, f) | Audio (Only p) f <- audio ]
-        backAudio = [ (i, f) | Audio (Without i) f <- audio ]
+    let normalAudio = [ (p, f) | (Only p, f) <- audio ]
+        backAudio = [ (i, f) | (Without i, f) <- audio ]
         bestBack :: (Instrument, FilePath)
         bestBack = head $ do
           i <- [Drums, Guitar, Keyboard, Bass, Vocal]
