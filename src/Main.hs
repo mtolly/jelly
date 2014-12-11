@@ -337,7 +337,7 @@ insideRect :: (Integral a) => (a, a) -> SDL.Rect -> Bool
 (x, y) `insideRect` (SDL.Rect rx ry w h) = and
   [ rx <= xi
   , xi < rx + w
-  , ry < yi
+  , ry <= yi
   , yi < ry + h
   ] where xi = fromIntegral x
           yi = fromIntegral y

@@ -6,6 +6,8 @@ uses [SDL2](https://www.libsdl.org/),
 [libsndfile](http://www.mega-nerd.com/libsndfile/),
 and [Rubber Band Library](http://breakfastquay.com/rubberband/).
 
+![Jelly](https://raw.github.com/mtolly/jelly/master/screenshot.png)
+
 Supports loading multiple instruments for the same song all together.
 Run like so:
 
