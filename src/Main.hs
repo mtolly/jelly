@@ -131,12 +131,21 @@ main = do
 
     putStrLn $ "Loaded: " ++ theTitle ++ " " ++ show theInstruments
 
-    let auds = map audioHandle audio
-    -- srcs <- AL.genObjectNames $ length auds * 2
-    -- forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
-    --   AL.sourcePosition src $= AL.Vertex3 x 0 0
+    let normalAudio = [ (p, f) | Audio (Only p) f <- audio ]
+        backAudio = [ (i, f) | Audio (Without i) f <- audio ]
+        bestBack :: (Instrument, FilePath)
+        bestBack = head $ do
+          i <- [Drums, Guitar, Keyboard, Bass, Vocal]
+          filter ((i ==) . fst) backAudio
+        normalNegative = do
+          (p, f) <- normalAudio
+          guard $ partToInstrument p /= fst bestBack
+          return f
+        labels = map (Only . fst) normalAudio ++ [Without $ fst bestBack]
+        inputs :: [([FilePath], [FilePath])]
+        inputs = [ ([f], []) | (_, f) <- normalAudio ] ++ [([snd bestBack], normalNegative)]
 
-    withPipe 2 1 [ ([aud], []) | aud <- auds ]
+    withPipe 2 1 inputs
       $ \pipe -> let
 
       updatePosition ps = do
@@ -179,12 +188,12 @@ main = do
               — do zip sheets $ sheetShow $ getStopState s
             audioButtons = map
               — do
-                \(aud, gain) -> (++)
+                \(apart, gain) -> (++)
                   — do if gain /= 0 then "" else "no_"
-                  — case audioPart aud of
+                  — case apart of
                     Only p -> partToFile p
                     Without _ -> "band"
-              — do zip audio $ audioGains $ getStopState s
+              — do zip labels $ audioGains $ getStopState s
             partToFile = map toLower . drop 4 . show
             buttonRect = SDL.Rect 0 0 100 30
             largeBtnRect = SDL.Rect 0 0 80 60
@@ -309,7 +318,7 @@ main = do
       in loop $ Stopped StopState
         { audioPosn  = 0
         , playSpeed  = 1
-        , audioGains = map (const 1) auds
+        , audioGains = map (const 1) labels
         , sheetShow  = zipWith const (True : repeat False) sheets
         }
 
