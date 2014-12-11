@@ -144,8 +144,10 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
   True -> playPause pipe >> seekTo pos speed pipe >> playPause pipe
   False -> do
     readIORef (filler_ pipe) >>= stop
-    forM_ (handles_ pipe) $ \h ->
-      Snd.hSeek h Snd.AbsoluteSeek $ floor $ pos * 44100
+    forM_ (handles_ pipe) $ \h -> let
+      len = Snd.frames $ Snd.hInfo h
+      newPos = min len $ floor $ pos * 44100
+      in Snd.hSeek h Snd.AbsoluteSeek newPos
     s <- newStoppable
     let source :: C.Source IO [V.Vector Int16]
         source = case speed of
