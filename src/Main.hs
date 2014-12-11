@@ -6,9 +6,10 @@ module Main (main) where
 import           Control.Applicative     ((<$>))
 import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
-import           Control.Monad           (forM, unless, when)
+import           Control.Monad           (forM, guard, unless, when)
 import           Data.Char               (toLower)
-import           Data.List               (intercalate, transpose)
+import           Data.List               (intercalate, nub, transpose)
+import           Data.Maybe              (fromJust)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
 import           Foreign.C               (CInt, peekCString, withCString)
@@ -65,13 +66,13 @@ main :: IO ()
 main = do
 
 #ifdef MACAPP
-  song <- macSelectDir >>= \case
+  songs <- macSelectDir >>= \case
     Nothing   -> error "No song folder selected; quitting app."
-    Just song -> return song
+    Just song -> return [song]
 #else
-  song <- getArgs >>= \case
-    [song] -> return song
-    _      -> getProgName >>= \pn -> error $ "Usage: "++pn++" song-folder"
+  songs <- getArgs >>= \case
+    []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
+    songs -> return songs
 #endif
 
   withALContext
@@ -80,16 +81,29 @@ main = do
     $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
     $ \window rend -> do
 
-    Just info <- loadInfo   song
-    Just trks <- loadTracks song
-    Just bts  <- loadBeats  song
-    let fileTrks = filter (\t -> trackClass t == "JMFileTrack") trks
+    Just allInfo <- fmap sequence $ mapM loadInfo   songs
+    Just allTrks <- fmap sequence $ mapM loadTracks songs
+    Just bts     <- loadBeats $ head songs
 
-    sheets <- fmap concat $ forM fileTrks $ \trk -> if trackTitle trk == Just "Band"
-      then return []
-      else do
-        let Just part = trackTitle trk >>= titleToPart
-            findRows f = do
+    theTitle <- case nub $ map title allInfo of
+      [x] -> return x
+      xs -> error $ "Different song titles: " ++ show xs
+    _ <- case nub $ map artist allInfo of
+      [x] -> return x
+      xs -> error $ "Different song artists: " ++ show xs
+    let theInstruments = map instrument allInfo
+
+    let fileTrks = do
+          (song, inst, instTrks) <- zip3 songs theInstruments allTrks
+          trk <- instTrks
+          guard $ trackClass trk == "JMFileTrack"
+          let Just apart = titleToAudioPart (fromJust $ trackTitle trk) inst
+          return (song, apart, trk)
+
+    sheets <- fmap concat $ forM fileTrks $ \(song, apart, trk) -> case apart of
+      Without _ -> return []
+      Only part -> do
+        let findRows f = do
               pages <- f trk song
               Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) pages
               return $ splitRows trk texs
@@ -98,10 +112,9 @@ main = do
         return $ if null tab
           then [Sheet (Notation part) notes]
           else [Sheet (Notation part) notes, Sheet (Tab part) tab]
-    audio <- forM fileTrks $ \trk -> do
-      let Just part = trackTitle trk >>= \t -> titleToAudioPart t $ instrument info
+    audio <- forM fileTrks $ \(song, apart, trk) -> do
       Just aud <- findAudio trk song
-      return $ Audio part aud
+      return $ Audio apart aud
 
     let toggleImages = (++)
           — map (map toLower . drop 4 . show) ([minBound .. maxBound] :: [Part])
@@ -116,7 +129,7 @@ main = do
           Just img -> img
           Nothing  -> error $ "Couldn't find image: " ++ show str
 
-    putStrLn $ "Loaded: " ++ title info ++ " (" ++ show (instrument info) ++ ")"
+    putStrLn $ "Loaded: " ++ theTitle ++ " " ++ show theInstruments
 
     let auds = map audioHandle audio
     -- srcs <- AL.genObjectNames $ length auds * 2
