@@ -11,7 +11,7 @@ import           Data.Char               (toLower)
 import           Data.List               (intercalate, nub, transpose)
 import           Data.Maybe              (fromJust)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
-                                          poke, (.|.))
+                                          with, (.|.))
 import           Foreign.C               (CInt, peekCString, withCString)
 import qualified Graphics.UI.SDL         as SDL
 import qualified Graphics.UI.SDL.Image   as Image
@@ -167,7 +167,7 @@ main = do
         pn <- case s of
           Stopped StopState{audioPosn = pn} -> return pn
           Playing playstate -> updatePosition playstate
-        let rowN = rowNumber bts pn
+        let (rowN, frac) = rowNumber bts pn
             sheetsToDraw = map snd $ filter fst $ zip (sheetShow $ getStopState s) sheets
             sheetStream = case sheetsToDraw of
               [sheet] -> concat $ drop rowN $ sheetRows sheet
@@ -193,6 +193,12 @@ main = do
             buttonRect = SDL.Rect 0 0 100 30
             largeBtnRect = SDL.Rect 0 0 80 60
             thinLargeBtnRect = SDL.Rect 0 0 40 60
+            systemHeight = sum $ do
+              sheet <- sheetsToDraw
+              let row = head $ sheetRows sheet
+              rect <- map snd row
+              return $ SDL.rectH rect
+        zero $ SDL.setRenderDrawColor rend 0 0 0 255
         zero $ SDL.renderClear rend
         renderHorizSeq rend
           [ case s of
@@ -207,6 +213,9 @@ main = do
         renderHorizSeq rend [ (getImage b, buttonRect) | b <- sheetButtons ] (240, 0)
         renderHorizSeq rend [ (getImage b, buttonRect) | b <- audioButtons ] (240, 30)
         renderVertSeq rend sheetStream (0, 60)
+        zero $ SDL.setRenderDrawColor rend 255 0 0 255
+        zero $ with (SDL.Rect (floor $ frac * 724) 60 2 systemHeight) $
+          SDL.renderFillRect rend
         SDL.renderPresent rend
 
       whileStopped s f = case s of
@@ -438,10 +447,9 @@ renderVertSeq rend ((t, r) : rest) (x, y) = do
     zero $ SDL.getRendererOutputSize rend nullPtr ph
     peek ph
   when (y < h) $ do
-    alloca $ \p0 -> alloca $ \p1 -> do
-      poke p0 r
-      poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
-      zero $ SDL.renderCopy rend t p0 p1
+    with r $ \p0 ->
+      with (SDL.Rect x y (SDL.rectW r) (SDL.rectH r)) $ \p1 ->
+        zero $ SDL.renderCopy rend t p0 p1
     renderVertSeq rend rest (x, y + SDL.rectH r)
 
 -- | Renders a sequence of images at 1:1 aspect ratio in a horizontal sequence.
@@ -453,10 +461,9 @@ renderHorizSeq rend ((t, r) : rest) (x, y) = do
     zero $ SDL.getRendererOutputSize rend pw nullPtr
     peek pw
   when (x < w) $ do
-    alloca $ \p0 -> alloca $ \p1 -> do
-      poke p0 r
-      poke p1 $ SDL.Rect x y (SDL.rectW r) (SDL.rectH r)
-      zero $ SDL.renderCopy rend t p0 p1
+    with r $ \p0 ->
+      with (SDL.Rect x y (SDL.rectW r) (SDL.rectH r)) $ \p1 ->
+        zero $ SDL.renderCopy rend t p0 p1
     renderHorizSeq rend rest (x + SDL.rectW r, y)
 
 -- | Splits sheet music images into a list of rows, where each row is a
@@ -477,12 +484,21 @@ splitRows trk = go 0 where
           nextRect = SDL.Rect 0 0 sheetWidth nextHeight
           in [(t, thisRect), (t', nextRect)] : go nextHeight tt
 
+rowStarts :: [Beat] -> [Double]
+rowStarts = takeOdds . map position . filter isDownbeat where
+  takeOdds (_ : x : xs) = x : takeOdds xs
+  takeOdds _            = []
+
 -- | Given the contents of beats.plist, translates a position in seconds
 -- to the sheet music row number we're on (starting from 0).
-rowNumber :: [Beat] -> Double -> Int
-rowNumber bts pos = let
-  downs = map position $ filter isDownbeat bts
-  in div (max 0 $ length (takeWhile (< pos) downs) - 2) 2
+rowNumber :: [Beat] -> Double -> (Int, Double)
+rowNumber bts pos = case span (< pos) $ rowStarts bts of
+  ([], _ ) -> (0, 0)
+  (xs, []) -> (length xs - 1, 0)
+  (xs, ys) -> let
+    rowStart = last xs
+    rowEnd   = head ys
+    in (length xs - 1, (pos - rowStart) / (rowEnd - rowStart))
 
 -- | Clever syntax trick: turn function call arguments into \"bulleted lists\".
 -- See definitions of "withWindowAndRenderer", "withALContext", etc.
