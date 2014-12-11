@@ -251,10 +251,17 @@ main = do
         Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_V) -> toggleVolume 3 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_B) -> toggleVolume 4 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_N) -> toggleVolume 5 s >>= eloop
+        Just (KeyPress SDL.SDL_SCANCODE_M) -> toggleVolume 6 s >>= eloop
         Just (KeyPress SDL.SDL_SCANCODE_A) -> eloop $ toggleSheet 0 s
         Just (KeyPress SDL.SDL_SCANCODE_S) -> eloop $ toggleSheet 1 s
         Just (KeyPress SDL.SDL_SCANCODE_D) -> eloop $ toggleSheet 2 s
         Just (KeyPress SDL.SDL_SCANCODE_F) -> eloop $ toggleSheet 3 s
+        Just (KeyPress SDL.SDL_SCANCODE_G) -> eloop $ toggleSheet 4 s
+        Just (KeyPress SDL.SDL_SCANCODE_H) -> eloop $ toggleSheet 5 s
+        Just (KeyPress SDL.SDL_SCANCODE_J) -> eloop $ toggleSheet 6 s
         Just (SDL.MouseButtonEvent
           { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
           , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
