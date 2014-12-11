@@ -4,11 +4,10 @@
 module Main (main) where
 
 import           Control.Applicative     ((<$>))
-import           Control.Concurrent      (forkIO, threadDelay, killThread, ThreadId)
+import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
 import           Control.Monad           (forM, unless, when)
 import           Data.Char               (toLower)
-import           Data.Conduit            (($$), (=$=))
 import           Data.List               (intercalate, transpose)
 import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
                                           poke, (.|.))
@@ -19,10 +18,8 @@ import           Sound.OpenAL            (($=))
 import qualified Sound.OpenAL            as AL
 import           System.FilePath         ((<.>), (</>))
 
-import           Audio
 import           Jammit
-
-import Control.Monad.Trans.Resource
+import           AudioPipe
 
 #ifndef MACAPP
 import Paths_jelly (getDataFileName)
@@ -126,43 +123,29 @@ main = do
     -- forM_ (zip srcs $ cycle [-1, 1]) $ \(src, x) ->
     --   AL.sourcePosition src $= AL.Vertex3 x 0 0
 
-    let
+    withPipe 2 1 [ ([aud], []) | aud <- auds ]
+      $ \pipe -> let
+
       updatePosition ps = do
         let ss = stopState ps
         tend <- fromIntegral <$> SDL.getTicks
         let diffSeconds = fromIntegral (tend - startTicks ps) / 1000
         return $ audioPosn ss + diffSeconds / playSpeed ss
-    let
-      -- isFull = all (>= sinkQueueSize) <$> mapM (AL.get . AL.buffersQueued) srcs
+
       start ss = do
-        -- Seek all the audio handles to our saved position
-        let pos = round $ audioPosn ss * 44100
-        -- Start the audio conduit, and wait for it to fill the queues
-        let sink = supply stereoPositions $ do
-              g <- map realToFrac $ audioGains ss
-              [g, g]
-            pipeline 1 = load pos auds $$ sink
-            pipeline speed
-              =   load pos auds
-              $$  stretch 44100 (length auds * 2) speed 1
-              =$= convert
-              =$= sink
-            stereoPositions = cycle [AL.Vertex3 (-1) 0 0, AL.Vertex3 1 0 0]
-        tid <- forkIO $ runResourceT $ pipeline $ playSpeed ss
+        playPause pipe
         -- Mark the sdl ticks when we started audio
         starttks <- fromIntegral <$> SDL.getTicks
         return $ PlayState
           { startTicks  = starttks
-          , audioThread = tid
           , stopState   = ss
           }
-    let
+
       stop ps = do
+        playPause pipe
         newpn <- updatePosition ps
-        -- Kill the audio thread
-        killThread $ audioThread ps
         return $ (stopState ps) { audioPosn = newpn }
-    let
+
       draw s = do
         pn <- case s of
           Stopped StopState{audioPosn = pn} -> return pn
@@ -208,23 +191,25 @@ main = do
         renderHorizSeq rend [ (getImage b, buttonRect) | b <- audioButtons ] (240, 30)
         renderVertSeq rend sheetStream (0, 60)
         SDL.renderPresent rend
-    let
-      editStopped s statef = case s of
-        Stopped ss -> return $ Stopped $ statef ss
-        Playing ps -> do
-          ss <- stop ps
-          threadDelay 100000
-          fmap Playing $ start $ statef ss
-      toggleVolume i s = editStopped s $ \ss -> let
+
+      whileStopped s f = case s of
+        Stopped ss -> fmap Stopped $ f ss
+        Playing ps -> fmap Playing $ stop ps >>= f >>= start
+      toggleVolume i s = let
+        ss = getStopState s
         vol = audioGains ss !! i
         vol' = if vol == 1 then 0 else 1
-        in ss { audioGains = updateNth i vol' $ audioGains ss }
+        gains' = updateNth i vol' $ audioGains ss
+        s' = setStopState (ss { audioGains = gains' }) s
+        in do
+          setVolumes gains' pipe
+          return s'
       updateNth i x xs = case splitAt i xs of
         (ys, zs) -> ys ++ [x] ++ drop 1 zs
       flipNth i = zipWith ($) $ updateNth i not $ repeat id
       toggleSheet i = mapStopState $
         \ss -> ss { sheetShow = flipNth i $ sheetShow ss }
-    let
+
       loop s = do
         draw s
         threadDelay 16000 -- ehhh, fix this later
@@ -280,16 +265,22 @@ main = do
         Just _  -> eloop s
         Nothing -> loop  s
         where moveLeft = do
-                s' <- editStopped s $ \ss ->
-                  ss { audioPosn = max 0 $ audioPosn ss - 5 }
+                s' <- whileStopped s $ \ss -> do
+                  let newPosn = max 0 $ audioPosn ss - 5
+                  seekTo newPosn (playSpeed ss) pipe
+                  return $ ss { audioPosn = newPosn }
                 eloop s'
               moveRight = do
-                s' <- editStopped s $ \ss ->
-                  ss { audioPosn = audioPosn ss + 5 }
+                s' <- whileStopped s $ \ss -> do
+                  let newPosn = audioPosn ss + 5
+                  seekTo newPosn (playSpeed ss) pipe
+                  return $ ss { audioPosn = newPosn }
                 eloop s'
               toggleSpeed = do
-                s' <- editStopped s $ \ss ->
-                  ss { playSpeed = if playSpeed ss == 1 then 1.25 else 1 }
+                s' <- whileStopped s $ \ss -> do
+                  let newSpeed = if playSpeed ss == 1 then 1.25 else 1
+                  seekTo (audioPosn ss) newSpeed pipe
+                  return $ ss { playSpeed = newSpeed }
                 eloop s'
               togglePlaying = case s of
                 Playing ps -> stop  ps >>= eloop . Stopped
@@ -298,13 +289,12 @@ main = do
                 Playing ps -> stop ps >> return ()
                 Stopped _  -> return ()
 
-
-    loop $ Stopped StopState
-      { audioPosn  = 0
-      , playSpeed  = 1
-      , audioGains = map (const 1) auds
-      , sheetShow  = zipWith const (True : repeat False) sheets
-      }
+      in loop $ Stopped StopState
+        { audioPosn  = 0
+        , playSpeed  = 1
+        , audioGains = map (const 1) auds
+        , sheetShow  = zipWith const (True : repeat False) sheets
+        }
 
 insideRect :: (Integral a) => (a, a) -> SDL.Rect -> Bool
 (x, y) `insideRect` (SDL.Rect rx ry w h) = and
@@ -324,7 +314,6 @@ data StopState = StopState
 
 data PlayState = PlayState
   { startTicks  :: Int -- sdl ticks
-  , audioThread :: ThreadId
   , stopState   :: StopState
   } deriving (Eq)
 
