@@ -24,35 +24,8 @@ import           AudioPipe
 import           TTF
 import           Util
 
-#ifndef MACAPP
 import Paths_jelly (getDataFileName)
 import System.Environment (getArgs, getProgName)
-#else
-import Foreign (free)
-import Foreign.C (CString, peekCString)
-import System.Environment.FindBin (getProgPath)
-
-getDataFileName :: FilePath -> IO FilePath
-getDataFileName f = getProgPath >>= \d ->
-  return $ d </> "../Resources" </> f
-
-foreign import ccall unsafe
-  "macSelectDir"
-  c_macSelectDir :: CString -> IO CString
-
-macSelectDir :: IO (Maybe FilePath)
-macSelectDir = do
-  jmt <- findJammitDir
-  p <- case jmt of
-    Nothing -> c_macSelectDir nullPtr
-    Just d  -> withCString d c_macSelectDir
-  if p == nullPtr
-    then return Nothing
-    else do
-      s <- peekCString p
-      free p
-      return $ Just s
-#endif
 
 data Sheet = Sheet
   { sheetPart :: SheetPart
@@ -62,15 +35,9 @@ data Sheet = Sheet
 main :: IO ()
 main = do
 
-#ifdef MACAPP
-  songs <- macSelectDir >>= \case
-    Nothing   -> error "No song folder selected; quitting app."
-    Just song -> return [song]
-#else
   songs <- getArgs >>= \case
     []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
     songs -> return songs
-#endif
 
   withALContext
     $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
@@ -288,20 +255,6 @@ main = do
             eloop $ toggleSheet (fromIntegral $ div (mx - 240) 100) s
           | (mx, my) `insideRect` SDL.Rect 240 30 9999 30 ->
             toggleVolume (fromIntegral $ div (mx - 240) 100) s >>= eloop
-#ifdef MACAPP
-        -- This should get handled automatically by SDL,
-        -- but for some reason it breaks in .app mode
-        -- so we have to handle it manually.
-        Just SDL.KeyboardEvent
-          { SDL.eventType           = SDL.SDL_KEYDOWN
-          , SDL.keyboardEventRepeat = 0
-          , SDL.keyboardEventKeysym = SDL.Keysym
-            { SDL.keysymScancode = SDL.SDL_SCANCODE_Q
-            , SDL.keysymMod      = keymod
-            }
-          } | keymod `elem` [SDL.KMOD_LGUI, SDL.KMOD_RGUI]
-          -> quit
-#endif
         Just _  -> eloop s
         Nothing -> loop  s
         where moveLeft = do

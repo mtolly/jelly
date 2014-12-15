@@ -40,9 +40,3 @@ executable jelly
     SDL2_ttf
   c-sources:
     cbits/ffi_wrappers.c
-  if flag(MacApp)
-    cpp-options: -DMACAPP
-    build-depends: FindBin
-    c-sources: picker.m
-    frameworks: Cocoa
-    cc-options: -Wall -Wextra -Wshadow
