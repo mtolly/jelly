@@ -349,6 +349,6 @@ findAudio trk dir = let
     b <- Dir.doesFileExist file
     return $ guard b >> Just file
 
-sheetWidth, sheetHeight :: (Integral a) => a
+sheetWidth, sheetHeight :: (Num a) => a
 sheetWidth  = 724
 sheetHeight = 1024

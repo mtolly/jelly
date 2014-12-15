@@ -6,12 +6,11 @@ module Main (main) where
 import           Control.Applicative     ((<$>), liftA2)
 import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
-import           Control.Monad           (forM, guard, when)
+import           Control.Monad           (forM, guard)
 import           Data.Char               (toLower)
 import           Data.List               (elemIndex, intercalate, nub, transpose)
 import           Data.Maybe              (fromJust)
-import           Foreign                 (Word32, alloca, nullPtr, peek, with,
-                                          (.|.))
+import           Foreign                 (Word32, alloca, peek, (.|.))
 import           Foreign.C               (CInt, withCString)
 import qualified Graphics.UI.SDL         as SDL
 import qualified Graphics.UI.SDL.Image   as Image
@@ -162,6 +161,31 @@ main = do
       newpn <- updatePosition ps
       return $ (stopState ps) { audioPosn = newpn }
 
+    menu s = row
+      [ Label PlayPause $ Whole $ getImage $ case s of
+        Stopped _ -> "play"
+        Playing _ -> "stop"
+      , Label MoveLeft $ Whole $ getImage "left"
+      , Label MoveRight $ Whole $ getImage "right"
+      , Label ToggleSlow $ Whole $ getImage $ case playSpeed $ getStopState s of
+        1 -> "no_slow"
+        _ -> "slow"
+      , column
+        [ row $ do
+          ((sheet, _), isShown) <- zip (sheetParts_ static) $ sheetShow $ getStopState s
+          let prefix = if isShown then "" else "no_"
+              filename = case sheet of
+                Notation p -> partToFile p
+                Tab p -> partToFile p ++ "tab"
+          return $ Label (ToggleSheet sheet) $ Whole $ getImage $ prefix ++ filename
+        , row $ do
+          (apart, gain) <- zip (audioParts_ static) $ audioGains $ getStopState s
+          let prefix = if gain /= 0 then "" else "no_"
+              filename = maybe "band" partToFile apart
+          return $ Label (ToggleAudio apart) $ Whole $ getImage $ prefix ++ filename
+        ]
+      ] where partToFile = map toLower . drop 4 . show
+
     draw s = do
       pn <- case s of
         Stopped StopState{audioPosn = pn} -> return pn
@@ -174,44 +198,21 @@ main = do
             [sheet] -> drop rowN $ snd sheet
             _ -> intercalate [Whole $ getImage "divider"] $
               transpose $ map (drop rowN . snd) sheetsToDraw
-          sheetButtons = map
-            — do
-              \(sheet, isShown) -> (++)
-                — do if isShown then "" else "no_"
-                — case fst sheet of
-                  Notation p -> partToFile p
-                  Tab p -> partToFile p ++ "tab"
-            — do zip (sheetParts_ static) $ sheetShow $ getStopState s
-          audioButtons = map
-            — do
-              \(apart, gain) -> (++)
-                — do if gain /= 0 then "" else "no_"
-                — maybe "band" partToFile apart
-            — do zip (audioParts_ static) $ audioGains $ getStopState s
-          partToFile = map toLower . drop 4 . show
-          buttonRect = SDL.Rect 0 0 100 30
-          largeBtnRect = SDL.Rect 0 0 80 60
-          thinLargeBtnRect = SDL.Rect 0 0 40 60
+          thisMenu = menu s
       systemHeight <- fmap sum $ forM sheetsToDraw $ \sheet ->
         fmap snd $ getDims $ head $ snd sheet
       zero $ SDL.setRenderDrawColor rend 0 0 0 255
       zero $ SDL.renderClear rend
-      renderHorizSeq rend
-        [ case s of
-          Stopped _ -> (getImage "play", largeBtnRect)
-          Playing _ -> (getImage "stop", largeBtnRect)
-        , (getImage "left", thinLargeBtnRect)
-        , (getImage "right", thinLargeBtnRect)
-        , case playSpeed $ getStopState s of
-          1 -> (getImage "no_slow", largeBtnRect)
-          _ -> (getImage "slow"   , largeBtnRect)
-        ] (0, 0)
-      renderHorizSeq rend [ (getImage b, buttonRect) | b <- sheetButtons ] (240, 0)
-      renderHorizSeq rend [ (getImage b, buttonRect) | b <- audioButtons ] (240, 30)
-      render rend (0, 60) sheetStream
-      zero $ SDL.setRenderDrawColor rend 255 0 0 255
-      zero $ with (SDL.Rect (floor $ frac * 724) 60 2 systemHeight) $
-        SDL.renderFillRect rend
+      render rend (0, 0) $ column
+        [ thisMenu
+        , layers
+          [ fmap undefined sheetStream
+          , row
+            [ Rectangle (floor $ frac * sheetWidth, 0) (SDL.Color 255 255 255 255)
+            , Rectangle (2, systemHeight) (SDL.Color 255 0 0 255)
+            ]
+          ]
+        ]
       SDL.renderPresent rend
 
     whileStopped s f = case s of
@@ -411,20 +412,6 @@ pollEvent :: IO (Maybe SDL.Event)
 pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
   1 -> Just <$> peek pevt
   _ -> return Nothing
-
--- | Renders a sequence of images at 1:1 aspect ratio in a horizontal sequence.
--- Stops rendering images once they go past the window's right edge.
-renderHorizSeq :: SDL.Renderer -> [(SDL.Texture, SDL.Rect)] -> (CInt, CInt) -> IO ()
-renderHorizSeq _    []              _      = return ()
-renderHorizSeq rend ((t, r) : rest) (x, y) = do
-  w <- alloca $ \pw -> do
-    zero $ SDL.getRendererOutputSize rend pw nullPtr
-    peek pw
-  when (x < w) $ do
-    with r $ \p0 ->
-      with (SDL.Rect x y (SDL.rectW r) (SDL.rectH r)) $ \p1 ->
-        zero $ SDL.renderCopy rend t p0 p1
-    renderHorizSeq rend rest (x + SDL.rectW r, y)
 
 splitRows' :: Track -> [SDL.Texture] -> [Arrangement a]
 splitRows' trk texs = map f $ splitRows trk texs where
