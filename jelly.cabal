@@ -16,6 +16,8 @@ executable jelly
     Jammit
     Paths_jelly
     AudioPipe
+    TTF
+    Util
   default-language: Haskell2010
   ghc-options: -Wall -threaded
   build-depends:
@@ -34,6 +36,10 @@ executable jelly
     , conduit
     , transformers
     , resourcet
+  pkgconfig-depends:
+    SDL2_ttf
+  c-sources:
+    cbits/ffi_wrappers.c
   if flag(MacApp)
     cpp-options: -DMACAPP
     build-depends: FindBin

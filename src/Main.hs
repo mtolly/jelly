@@ -6,13 +6,13 @@ module Main (main) where
 import           Control.Applicative     ((<$>), liftA2)
 import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
-import           Control.Monad           (forM, guard, unless, when)
+import           Control.Monad           (forM, guard, when)
 import           Data.Char               (toLower)
 import           Data.List               (intercalate, nub, transpose)
 import           Data.Maybe              (fromJust)
-import           Foreign                 (Ptr, Word32, alloca, nullPtr, peek,
-                                          with, (.|.))
-import           Foreign.C               (CInt, peekCString, withCString)
+import           Foreign                 (Word32, alloca, nullPtr, peek, with,
+                                          (.|.))
+import           Foreign.C               (CInt, withCString)
 import qualified Graphics.UI.SDL         as SDL
 import qualified Graphics.UI.SDL.Image   as Image
 import           Sound.OpenAL            (($=))
@@ -21,6 +21,8 @@ import           System.FilePath         ((<.>), (</>))
 
 import           Jammit
 import           AudioPipe
+import           TTF
+import           Util
 
 #ifndef MACAPP
 import Paths_jelly (getDataFileName)
@@ -73,6 +75,7 @@ main = do
   withALContext
     $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
     $ withSDLImage [Image.InitPNG]
+    $ withTTF
     $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
     $ \window rend -> do
 
@@ -418,20 +421,6 @@ withALContext act = bracket
       — AL.currentContext $= Nothing
       — act
 
--- | Extracts and throws an SDL error if the action returns a null pointer.
-notNull :: IO (Ptr a) -> IO (Ptr a)
-notNull act = do
-  p <- act
-  if p == nullPtr
-    then SDL.getError >>= peekCString >>= error
-    else return p
-
--- | Extracts and throws an SDL error if the action doesn't return zero.
-zero :: (Eq a, Num a) => IO a -> IO ()
-zero act = do
-  n <- act
-  unless (n == 0) $ SDL.getError >>= peekCString >>= error
-
 -- | Returns Just an event if there is one currently in the queue.
 pollEvent :: IO (Maybe SDL.Event)
 pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
@@ -499,9 +488,3 @@ rowNumber bts pos = case span (< pos) $ rowStarts bts of
     rowStart = last xs
     rowEnd   = head ys
     in (length xs - 1, (pos - rowStart) / (rowEnd - rowStart))
-
--- | Clever syntax trick: turn function call arguments into \"bulleted lists\".
--- See definitions of "withWindowAndRenderer", "withALContext", etc.
-(—) :: (a -> b) -> a -> b
-(—) = ($)
-infixl 0 —
