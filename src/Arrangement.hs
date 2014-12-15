@@ -19,6 +19,7 @@ data Arrangement a
   | Whole SDL.Texture
   | Crop SDL.Rect SDL.Texture
   | Rectangle (CInt, CInt) SDL.Color
+  | Space (CInt, CInt)
   | Arrangement a `Beside` Arrangement a -- ^ left, right
   | Arrangement a `Above`  Arrangement a -- ^ above, below
   | Arrangement a `Behind` Arrangement a -- ^ back, front
@@ -34,15 +35,16 @@ layers = foldr Behind Empty
 -- position within the label.
 findLabel :: (CInt, CInt) -> Arrangement a -> IO (Maybe (a, (CInt, CInt)))
 findLabel (x, y) = \case
-  Whole _ -> return Nothing
-  Crop _ _ -> return Nothing
-  Rectangle _ _ -> return Nothing
+  Whole     {} -> return Nothing
+  Crop      {} -> return Nothing
+  Rectangle {} -> return Nothing
+  Empty     {} -> return Nothing
+  Space     {} -> return Nothing
   Label lbl arr -> do
     (w, h) <- getDims arr
     return $ do
       guard $ (0 <= x && x < w) && (0 <= y && y < h)
       Just (lbl, (x, y))
-  Empty -> return Nothing
   a0 `Beside` a1 -> do
     w <- getWidth a0
     if x < w
@@ -77,6 +79,7 @@ getDims (a0 `Behind` a1) = do
 getDims (Rectangle dims _) = return dims
 getDims (Label _ arr) = getDims arr
 getDims Empty = return (0, 0)
+getDims (Space dims) = return dims
 
 getWidth, getHeight :: Arrangement a -> IO CInt
 getWidth  = fmap fst . getDims
@@ -111,4 +114,5 @@ render rend pn arrange = do
           zero $ with (SDL.Rect x y w h) $ SDL.renderDrawRect rend
         Label _ ar -> go (x, y) ar
         Empty -> return ()
+        Space {} -> return ()
   go pn arrange
