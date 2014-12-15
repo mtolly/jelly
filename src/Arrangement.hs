@@ -15,14 +15,20 @@ import Control.Applicative
 import Control.Monad
 
 data Arrangement a
-  = Whole SDL.Texture
+  = Empty
+  | Whole SDL.Texture
   | Crop SDL.Rect SDL.Texture
   | Rectangle (CInt, CInt) SDL.Color
+  | Arrangement a `Beside` Arrangement a -- ^ left, right
+  | Arrangement a `Above`  Arrangement a -- ^ above, below
+  | Arrangement a `Behind` Arrangement a -- ^ back, front
   | Label a (Arrangement a)
-  | Row    [Arrangement a] -- ^ Head is left of tail
-  | Column [Arrangement a] -- ^ Head is above tail
-  | Layers [Arrangement a] -- ^ Head is behind tail
   deriving (Eq, Show, Functor)
+
+row, column, layers :: [Arrangement a] -> Arrangement a
+row    = foldr Beside Empty
+column = foldr Above  Empty
+layers = foldr Behind Empty
 
 -- | Given a location, finds the label that it is located in, as well as its
 -- position within the label.
@@ -36,42 +42,48 @@ findLabel (x, y) = \case
     return $ do
       guard $ (0 <= x && x < w) && (0 <= y && y < h)
       Just (lbl, (x, y))
-  Row [] -> return Nothing
-  Row (ar : ars) -> do
-    (w, _) <- getDims ar
+  Empty -> return Nothing
+  a0 `Beside` a1 -> do
+    w <- getWidth a0
     if x < w
-      then findLabel (x, y) ar
-      else findLabel (x - w, y) $ Row ars
-  Column [] -> return Nothing
-  Column (ar : ars) -> do
-    (_, h) <- getDims ar
+      then findLabel (x    , y) a0
+      else findLabel (x - w, y) a1
+  a0 `Above` a1 -> do
+    h <- getHeight a0
     if y < h
-      then findLabel (x, y) ar
-      else findLabel (x, y - h) $ Column ars
-  Layers [] -> return Nothing
-  Layers (ar : ars) -> findLabel (x, y) (Layers ars) >>= \case
+      then findLabel (x, y    ) a0
+      else findLabel (x, y - h) a1
+  a0 `Behind` a1 -> findLabel (x, y) a1 >>= \case
     Just res -> return $ Just res
-    Nothing -> findLabel (x, y) ar
+    Nothing  -> findLabel (x, y) a0
 
 getDims :: Arrangement a -> IO (CInt, CInt)
 getDims (Whole tex) = alloca $ \pw -> alloca $ \ph -> do
   zero $ SDL.queryTexture tex nullPtr nullPtr pw ph
   liftA2 (,) (peek pw) (peek ph)
 getDims (Crop (SDL.Rect _ _ w h) _) = return (w, h)
-getDims (Row arrs) = do
-  dims <- mapM getDims arrs
-  return (sum $ map fst dims, foldr max 0 $ map snd dims)
-getDims (Column arrs) = do
-  dims <- mapM getDims arrs
-  return (foldr max 0 $ map fst dims, sum $ map snd dims)
+getDims (a0 `Beside` a1) = do
+  (w0, h0) <- getDims a0
+  (w1, h1) <- getDims a1
+  return (w0 + w1, max h0 h1)
+getDims (a0 `Above` a1) = do
+  (w0, h0) <- getDims a0
+  (w1, h1) <- getDims a1
+  return (max w0 w1, h0 + h1)
+getDims (a0 `Behind` a1) = do
+  (w0, h0) <- getDims a0
+  (w1, h1) <- getDims a1
+  return (max w0 w1, max h0 h1)
 getDims (Rectangle dims _) = return dims
 getDims (Label _ arr) = getDims arr
-getDims (Layers arrs) = do
-  dims <- mapM getDims arrs
-  return (foldr max 0 $ map fst dims, foldr max 0 $ map snd dims)
+getDims Empty = return (0, 0)
+
+getWidth, getHeight :: Arrangement a -> IO CInt
+getWidth  = fmap fst . getDims
+getHeight = fmap snd . getDims
 
 render :: SDL.Renderer -> (CInt, CInt) -> Arrangement a -> IO ()
-render rend pn a0 = do
+render rend pn arrange = do
   (windowW, windowH) <- alloca $ \pw -> alloca $ \ph -> do
     zero $ SDL.getRendererOutputSize rend pw ph
     liftA2 (,) (peek pw) (peek ph)
@@ -83,22 +95,20 @@ render rend pn a0 = do
           with r $ \p0 ->
             with (SDL.Rect x y (SDL.rectW r) (SDL.rectH r)) $ \p1 ->
               SDL.renderCopy rend tex p0 p1
-        Row [] -> return ()
-        Row (ar : ars) -> do
-          (arx, _) <- getDims ar
-          go (x, y) ar
-          go (x + arx, y) $ Row ars
-        Column [] -> return ()
-        Column (ar : ars) -> do
-          (_, ary) <- getDims ar
-          go (x, y) ar
-          go (x, y + ary) $ Column ars
+        a0 `Beside` a1 -> do
+          w <- getWidth a0
+          go (x    , y) a0
+          go (x + w, y) a1
+        a0 `Above` a1 -> do
+          h <- getHeight a0
+          go (x, y    ) a0
+          go (x, y + h) a1
+        a0 `Behind` a1 -> do
+          go (x, y) a0
+          go (x, y) a1
         Rectangle (w, h) (SDL.Color r g b a) -> do
           zero $ SDL.setRenderDrawColor rend r g b a
           zero $ with (SDL.Rect x y w h) $ SDL.renderDrawRect rend
         Label _ ar -> go (x, y) ar
-        Layers [] -> return ()
-        Layers (ar : ars) -> do
-          go (x, y) ar
-          go (x, y) $ Layers ars
-  go pn a0
+        Empty -> return ()
+  go pn arrange

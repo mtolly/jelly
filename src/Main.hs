@@ -170,7 +170,7 @@ main = do
           sheetsToDraw = map snd $ filter fst
             $ zip (sheetShow $ getStopState s) $ sheetParts_ static
           sheetStream :: Arrangement ()
-          sheetStream = Column $ case sheetsToDraw of
+          sheetStream = column $ case sheetsToDraw of
             [sheet] -> drop rowN $ snd sheet
             _ -> intercalate [Whole $ getImage "divider"] $
               transpose $ map (drop rowN . snd) sheetsToDraw
@@ -192,9 +192,8 @@ main = do
           buttonRect = SDL.Rect 0 0 100 30
           largeBtnRect = SDL.Rect 0 0 80 60
           thinLargeBtnRect = SDL.Rect 0 0 40 60
-      systemHeight <- fmap sum $ forM sheetsToDraw $ \sheet -> do
-        let row = head $ snd sheet
-        fmap snd $ getDims row
+      systemHeight <- fmap sum $ forM sheetsToDraw $ \sheet ->
+        fmap snd $ getDims $ head $ snd sheet
       zero $ SDL.setRenderDrawColor rend 0 0 0 255
       zero $ SDL.renderClear rend
       renderHorizSeq rend
@@ -423,7 +422,7 @@ renderHorizSeq rend ((t, r) : rest) (x, y) = do
 
 splitRows' :: Track -> [SDL.Texture] -> [Arrangement a]
 splitRows' trk texs = map f $ splitRows trk texs where
-  f snips = Column [ Crop rect tex | (tex, rect) <- snips ]
+  f snips = column [ Crop rect tex | (tex, rect) <- snips ]
 
 -- | Splits sheet music images into a list of rows, where each row is a
 -- sequence of texture sections to be rendered in a vertical requence.
