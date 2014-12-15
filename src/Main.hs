@@ -296,15 +296,9 @@ main = do
         , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
         , SDL.mouseButtonEventX = mx
         , SDL.mouseButtonEventY = my
-        })
-        | (mx, my) `insideRect` SDL.Rect 0 0 80 60 -> togglePlaying
-        | (mx, my) `insideRect` SDL.Rect 80 0 40 60 -> moveLeft
-        | (mx, my) `insideRect` SDL.Rect 120 0 40 60 -> moveRight
-        | (mx, my) `insideRect` SDL.Rect 160 0 80 60 -> toggleSpeed
-        | (mx, my) `insideRect` SDL.Rect 240 0 9999 30 ->
-          eloop $ toggleSheet (fromIntegral $ div (mx - 240) 100) s
-        | (mx, my) `insideRect` SDL.Rect 240 30 9999 30 ->
-          toggleVolume (fromIntegral $ div (mx - 240) 100) s >>= eloop
+        }) -> findLabel (fromIntegral mx, fromIntegral my) (menu s) >>= \case
+          Just (act, _) -> runCommand act s >>= eloop
+          Nothing       -> eloop s
       Just _  -> eloop s
       Nothing -> loop  s
       where moveLeft = runCommand MoveLeft s >>= eloop
@@ -321,15 +315,6 @@ main = do
       , audioGains = map (const 1) $ audioParts_ static
       , sheetShow  = zipWith const (True : repeat False) $ sheetParts_ static
       }
-
-insideRect :: (Integral a) => (a, a) -> SDL.Rect -> Bool
-(x, y) `insideRect` (SDL.Rect rx ry w h) = and
-  [ rx <= xi
-  , xi < rx + w
-  , ry <= yi
-  , yi < ry + h
-  ] where xi = fromIntegral x
-          yi = fromIntegral y
 
 data StopState = StopState
   { audioPosn  :: Double -- seconds
