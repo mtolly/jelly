@@ -8,7 +8,7 @@ import           Control.Concurrent      (threadDelay)
 import           Control.Exception       (bracket, bracket_)
 import           Control.Monad           (forM, guard, when)
 import           Data.Char               (toLower)
-import           Data.List               (intercalate, nub, transpose)
+import           Data.List               (elemIndex, intercalate, nub, transpose)
 import           Data.Maybe              (fromJust)
 import           Foreign                 (Word32, alloca, nullPtr, peek, with,
                                           (.|.))
@@ -240,6 +240,29 @@ main = do
       draw s
       threadDelay 16000 -- ehhh, fix this later
       eloop s
+    runCommand :: Command -> State -> IO State
+    runCommand cmd s = case cmd of
+      ToggleSheet sp -> let
+        Just i = elemIndex sp $ map fst $ sheetParts_ static
+        in return $ toggleSheet i s
+      ToggleAudio aud -> let
+        Just i = elemIndex aud $ audioParts_ static
+        in toggleVolume i s
+      ToggleSlow -> whileStopped s $ \ss -> do
+        let newSpeed = if playSpeed ss == 1 then 1.25 else 1
+        seekTo (audioPosn ss) newSpeed $ audioPipe_ static
+        return $ ss { playSpeed = newSpeed }
+      PlayPause -> case s of
+        Playing ps -> stop  ps >>= return . Stopped
+        Stopped ss -> start ss >>= return . Playing
+      MoveLeft -> whileStopped s $ \ss -> do
+        let newPosn = max 0 $ audioPosn ss - 5
+        seekTo newPosn (playSpeed ss) $ audioPipe_ static
+        return $ ss { audioPosn = newPosn }
+      MoveRight -> whileStopped s $ \ss -> do
+        let newPosn = audioPosn ss + 5
+        seekTo newPosn (playSpeed ss) $ audioPipe_ static
+        return $ ss { audioPosn = newPosn }
     eloop s = pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> quit
       Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
@@ -283,27 +306,10 @@ main = do
           toggleVolume (fromIntegral $ div (mx - 240) 100) s >>= eloop
       Just _  -> eloop s
       Nothing -> loop  s
-      where moveLeft = do
-              s' <- whileStopped s $ \ss -> do
-                let newPosn = max 0 $ audioPosn ss - 5
-                seekTo newPosn (playSpeed ss) $ audioPipe_ static
-                return $ ss { audioPosn = newPosn }
-              eloop s'
-            moveRight = do
-              s' <- whileStopped s $ \ss -> do
-                let newPosn = audioPosn ss + 5
-                seekTo newPosn (playSpeed ss) $ audioPipe_ static
-                return $ ss { audioPosn = newPosn }
-              eloop s'
-            toggleSpeed = do
-              s' <- whileStopped s $ \ss -> do
-                let newSpeed = if playSpeed ss == 1 then 1.25 else 1
-                seekTo (audioPosn ss) newSpeed $ audioPipe_ static
-                return $ ss { playSpeed = newSpeed }
-              eloop s'
-            togglePlaying = case s of
-              Playing ps -> stop  ps >>= eloop . Stopped
-              Stopped ss -> start ss >>= eloop . Playing
+      where moveLeft = runCommand MoveLeft s >>= eloop
+            moveRight = runCommand MoveRight s >>= eloop
+            toggleSpeed = runCommand ToggleSlow s >>= eloop
+            togglePlaying = runCommand PlayPause s >>= eloop
             quit = case s of
               Playing ps -> stop ps >> return ()
               Stopped _  -> return ()
