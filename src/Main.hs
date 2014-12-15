@@ -24,8 +24,17 @@ import           TTF
 import           Util
 import           Arrangement
 
-import Paths_jelly (getDataFileName)
 import System.Environment (getArgs, getProgName)
+#ifndef LOCALRESOURCES
+import Paths_jelly (getDataFileName)
+#else
+import System.Environment.FindBin (getProgPath)
+
+getDataFileName :: FilePath -> IO FilePath
+getDataFileName fp = do
+  bin <- getProgPath
+  return $ bin </> fp
+#endif
 
 -- | State that doesn't change once everything is loaded
 data Static = Static

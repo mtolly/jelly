@@ -5,8 +5,8 @@ cabal-version: >= 1.10
 data-files:
   resources/*.png
 
-flag MacApp
-  description: Build an executable intended for a Mac OS X .app bundle
+flag LocalResources
+  description: Looks for the "resources/" folder in the same dir as the executable
   default: False
 
 executable jelly
@@ -41,3 +41,6 @@ executable jelly
     SDL2_ttf
   c-sources:
     cbits/ffi_wrappers.c
+  if flag(LocalResources)
+    build-depends: FindBin
+    cpp-options: -DLOCALRESOURCES
