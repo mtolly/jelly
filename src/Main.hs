@@ -29,7 +29,7 @@ import Paths_jelly (getDataFileName)
 import System.Environment (getArgs, getProgName)
 #else
 import Foreign (free)
-import Foreign.C (CString)
+import Foreign.C (CString, peekCString)
 import System.Environment.FindBin (getProgPath)
 
 getDataFileName :: FilePath -> IO FilePath
