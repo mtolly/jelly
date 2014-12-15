@@ -14,7 +14,7 @@ import qualified Graphics.UI.SDL as SDL
 foreign import ccall unsafe "TTF_Init" c_initTTF :: IO CInt
 foreign import ccall unsafe "TTF_Quit" c_quitTTF :: IO ()
 
-withTTF :: IO () -> IO ()
+withTTF :: IO a -> IO a
 withTTF = bracket_
   — c_initTTF >>= \case
     0 -> return ()

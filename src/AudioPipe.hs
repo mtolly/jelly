@@ -130,7 +130,7 @@ closePipe pipe = do
   forM_ (handles_ pipe) Snd.hClose
   forM_ (sources_ pipe) $ \(srcL, srcR) -> AL.deleteObjectNames [srcL, srcR]
 
-withPipe :: Double -> Double -> [Input] -> (AudioPipe -> IO ()) -> IO ()
+withPipe :: Double -> Double -> [Input] -> (AudioPipe -> IO a) -> IO a
 withPipe lenmax lenmin ins = bracket (makePipe lenmax lenmin ins) closePipe
 
 -- | If paused, seeks to the new position and begins queueing data.

@@ -24,7 +24,9 @@ data Arrangement a
   | Layers [Arrangement a] -- ^ Head is behind tail
   deriving (Eq, Show, Functor)
 
-findLabel :: (CInt, CInt) -> Arrangement a -> IO (Maybe a)
+-- | Given a location, finds the label that it is located in, as well as its
+-- position within the label.
+findLabel :: (CInt, CInt) -> Arrangement a -> IO (Maybe (a, (CInt, CInt)))
 findLabel (x, y) = \case
   Whole _ -> return Nothing
   Crop _ _ -> return Nothing
@@ -33,7 +35,7 @@ findLabel (x, y) = \case
     (w, h) <- getDims arr
     return $ do
       guard $ (0 <= x && x < w) && (0 <= y && y < h)
-      Just lbl
+      Just (lbl, (x, y))
   Row [] -> return Nothing
   Row (ar : ars) -> do
     (w, _) <- getDims ar
@@ -48,7 +50,7 @@ findLabel (x, y) = \case
       else findLabel (x, y - h) $ Column ars
   Layers [] -> return Nothing
   Layers (ar : ars) -> findLabel (x, y) (Layers ars) >>= \case
-    Just lbl -> return $ Just lbl
+    Just res -> return $ Just res
     Nothing -> findLabel (x, y) ar
 
 getDims :: Arrangement a -> IO (CInt, CInt)
