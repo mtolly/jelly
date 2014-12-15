@@ -23,6 +23,7 @@ import           Jammit
 import           AudioPipe
 import           TTF
 import           Util
+import           Arrangement
 
 import Paths_jelly (getDataFileName)
 import System.Environment (getArgs, getProgName)

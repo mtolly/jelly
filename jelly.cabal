@@ -18,6 +18,7 @@ executable jelly
     AudioPipe
     TTF
     Util
+    Arrangement
   default-language: Haskell2010
   ghc-options: -Wall -threaded
   build-depends:
