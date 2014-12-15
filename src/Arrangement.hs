@@ -19,8 +19,9 @@ data Arrangement a
   | Crop SDL.Rect SDL.Texture
   | Rectangle (CInt, CInt) SDL.Color
   | Label a (Arrangement a)
-  | Row [Arrangement a]
-  | Column [Arrangement a]
+  | Row    [Arrangement a] -- ^ Head is left of tail
+  | Column [Arrangement a] -- ^ Head is above tail
+  | Layers [Arrangement a] -- ^ Head is behind tail
   deriving (Eq, Show, Functor)
 
 findLabel :: (CInt, CInt) -> Arrangement a -> IO (Maybe a)
@@ -45,6 +46,10 @@ findLabel (x, y) = \case
     if y < h
       then findLabel (x, y) ar
       else findLabel (x, y - h) $ Column ars
+  Layers [] -> return Nothing
+  Layers (ar : ars) -> findLabel (x, y) (Layers ars) >>= \case
+    Just lbl -> return $ Just lbl
+    Nothing -> findLabel (x, y) ar
 
 getDims :: Arrangement a -> IO (CInt, CInt)
 getDims (Whole tex) = alloca $ \pw -> alloca $ \ph -> do
@@ -59,6 +64,9 @@ getDims (Column arrs) = do
   return (foldr max 0 $ map fst dims, sum $ map snd dims)
 getDims (Rectangle dims _) = return dims
 getDims (Label _ arr) = getDims arr
+getDims (Layers arrs) = do
+  dims <- mapM getDims arrs
+  return (foldr max 0 $ map fst dims, foldr max 0 $ map snd dims)
 
 render :: SDL.Renderer -> (CInt, CInt) -> Arrangement a -> IO ()
 render rend pn a0 = do
@@ -87,4 +95,8 @@ render rend pn a0 = do
           zero $ SDL.setRenderDrawColor rend r g b a
           zero $ with (SDL.Rect x y w h) $ SDL.renderDrawRect rend
         Label _ ar -> go (x, y) ar
+        Layers [] -> return ()
+        Layers (ar : ars) -> do
+          go (x, y) ar
+          go (x, y) $ Layers ars
   go pn a0
