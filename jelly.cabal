@@ -3,7 +3,7 @@ version: 0.1
 build-type: Simple
 cabal-version: >= 1.10
 data-files:
-  img/*.png
+  resources/*.png
 
 flag MacApp
   description: Build an executable intended for a Mac OS X .app bundle

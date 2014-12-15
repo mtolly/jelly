@@ -87,9 +87,10 @@ withLoad songs act = withALContext
       simpleImages = words "play stop divider left right"
       allImages = simpleImages ++ toggleImages ++ map ("no_" ++) toggleImages
   images <- forM allImages $ \img -> do
-    dataLoc <- getDataFileName $ "img" </> img <.> "png"
-    Right tex <- Image.imgLoadTexture rend dataLoc
-    return (img, tex)
+    dataLoc <- getDataFileName $ "resources" </> img <.> "png"
+    Image.imgLoadTexture rend dataLoc >>= \case
+      Right tex -> return (img, tex)
+      Left err -> error $ "Error in loading image (" ++ dataLoc ++ "): " ++ show err
   let getImage str = case lookup str images of
         Just img -> img
         Nothing  -> error $ "Couldn't find image: " ++ show str
