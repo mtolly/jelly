@@ -19,11 +19,11 @@ mingw-deps:
 	cabal install Cabal
 	cd mingw-deps && ./fetch.sh
 	cabal install c2hs
-	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --with-pkg-config="`pwd`/mingw-deps/bin/pkg-config.exe" --allow-newer=sdl2
+	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --allow-newer=sdl2 --flags LocalResources
 
 .PHONY: mingw
 mingw:
-	cabal configure --flags LocalResources
+	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal configure --flags LocalResources
 	cabal build
 	cp dist/build/jelly/jelly.exe mingw/jelly.exe
 	strip mingw/jelly.exe
