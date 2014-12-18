@@ -20,7 +20,6 @@ import           System.FilePath         ((<.>), (</>))
 
 import           Jammit
 import           AudioPipe
-import           TTF
 import           Util
 import           Arrangement
 
@@ -51,7 +50,6 @@ withLoad :: [FilePath] -> (Static -> IO a) -> IO a
 withLoad songs act = withALContext
   $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
   $ withSDLImage [Image.InitPNG]
-  $ withTTF
   $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
   $ \window rend -> do
 

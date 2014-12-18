@@ -1,10 +1,12 @@
 .PHONY: build
 build:
+	cabal install --only-dependencies --allow-newer=sdl2
 	cabal configure
 	cabal build
 
 .PHONY: mac
 mac:
+	cabal install --only-dependencies --allow-newer=sdl2 --flags LocalResources
 	cabal configure --flags LocalResources
 	cabal build
 	cp dist/build/jelly/jelly mac/jelly
@@ -16,13 +18,13 @@ mac:
 
 .PHONY: mingw-deps
 mingw-deps:
-	cabal install Cabal
 	cd mingw-deps && ./fetch.sh
 	cabal install c2hs
-	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --allow-newer=sdl2 --flags LocalResources
 
 .PHONY: mingw
 mingw:
+	cabal install Cabal
+	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --allow-newer=sdl2 --flags LocalResources
 	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal configure --flags LocalResources
 	cabal build
 	cp dist/build/jelly/jelly.exe mingw/jelly.exe
@@ -31,3 +33,4 @@ mingw:
 	cp mingw-deps/bin/*.dll mingw/
 	rm -rf mingw/resources
 	cp -r resources mingw/resources
+	cp /mingw/bin/libstdc++-6.dll mingw/
