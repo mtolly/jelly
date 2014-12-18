@@ -19,7 +19,7 @@ mingw-deps:
 	cabal install Cabal
 	cd mingw-deps && ./fetch.sh
 	cabal install c2hs
-	PATH="mingw-deps/bin:$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --with-pkg-config="`pwd`/mingw-deps/bin/pkg-config.exe" --allow-newer=sdl2
+	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --with-pkg-config="`pwd`/mingw-deps/bin/pkg-config.exe" --allow-newer=sdl2
 
 .PHONY: mingw
 mingw:
