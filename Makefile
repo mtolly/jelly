@@ -16,8 +16,8 @@ mac:
 
 .PHONY: mingw-deps
 mingw-deps:
-	mingw-deps/fetch.sh
-	cabal install --only-dependencies --extra-lib-dirs=mingw-deps/lib --extra-include-dirs=mingw-deps/include
+	cd mingw-deps && ./fetch.sh
+	cabal install --only-dependencies --extra-lib-dirs=mingw-deps/lib --extra-include-dirs=mingw-deps/include --with-pkg-config=mingw-deps/bin/pkg-config.exe --allow-newer=sdl2
 
 .PHONY: mingw
 mingw:
