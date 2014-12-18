@@ -130,6 +130,9 @@ wget -nc http://code.breakfastquay.com/attachments/download/34/rubberband-1.8.1.
 tar -xvjf rubberband-1.8.1.tar.bz2
 cd rubberband-1.8.1
 ./configure --prefix="$DEPSDIR"
+sed -i 's/\.so/\.dll/' Makefile
 make
 make install
 cd ..
+rm lib/librubberband.a
+cp lib/librubberband.dll bin/librubberband.dll

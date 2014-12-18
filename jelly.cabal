@@ -37,8 +37,10 @@ executable jelly
     , conduit
     , transformers
     , resourcet
+  extra-libraries:
+    sdl2
   pkgconfig-depends:
-    SDL2_ttf
+    sdl2, SDL2_ttf
   c-sources:
     cbits/ffi_wrappers.c
   if flag(LocalResources)
