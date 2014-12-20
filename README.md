@@ -1,10 +1,12 @@
 A (very basic, work-in-progress) free viewer
-for [Jammit](http://www.jammit.com/) content.
-Written in Haskell;
-uses [SDL2](https://www.libsdl.org/),
-[OpenAL](http://en.wikipedia.org/wiki/OpenAL),
-[libsndfile](http://www.mega-nerd.com/libsndfile/),
-and [Rubber Band Library](http://breakfastquay.com/rubberband/).
+for [Jammit](http://www.jammit.com/) content, written in Haskell. Built with:
+
+  * [SDL2](https://www.libsdl.org/)
+  * [`SDL2_image`](https://www.libsdl.org/projects/SDL_image/)
+  * [OpenAL](http://en.wikipedia.org/wiki/OpenAL)
+  * [`libsndfile`](http://www.mega-nerd.com/libsndfile/)
+  * [Rubber Band Library](http://breakfastquay.com/rubberband/)
+  * [`conduit`](https://hackage.haskell.org/package/conduit)
 
 ![Jelly](https://raw.github.com/mtolly/jelly/master/screenshot.png)
 
