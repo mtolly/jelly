@@ -4,6 +4,12 @@ build-type: Simple
 cabal-version: >= 1.10
 data-files:
   resources/*.png
+license: GPL-3
+license-file: LICENSE
+category: Music
+maintainer: miketolly@gmail.com
+synopsis: Free viewer for Jammit sheet music and audio content
+homepage: https://github.com/mtolly/jelly
 
 flag LocalResources
   description: Looks for the "resources/" folder in the same dir as the executable

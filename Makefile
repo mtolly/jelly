@@ -15,6 +15,7 @@ mac:
 	cp -r resources mac/resources
 	rm -rf mac/libs
 	dylibbundler -cd -of -b -x mac/jelly -d mac/libs -p "@executable_path/libs/"
+	cp README.md mac/
 
 .PHONY: mingw-deps
 mingw-deps:
@@ -34,3 +35,4 @@ mingw:
 	rm -rf mingw/resources
 	cp -r resources mingw/resources
 	cp /mingw/bin/libstdc++-6.dll mingw/
+	cp README.md mingw/

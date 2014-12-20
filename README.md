@@ -20,3 +20,7 @@ and they should all be for the same song.
 
 Click on the buttons up top to play/pause, slow down, skip around,
 and toggle each part's sheet music or audio.
+
+Uses software variously licensed under the [GPL](http://www.gnu.org/licenses/gpl-3.0.html), [LGPL](http://www.gnu.org/licenses/lgpl.html), [MIT](http://opensource.org/licenses/MIT), and [BSD3](http://opensource.org/licenses/BSD-3-Clause) licenses.
+The result is subject to the terms of the GPLv3.
+Please [email](mailto:miketolly@gmail.com) if you need help obtaining source for any of the libraries.
