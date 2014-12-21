@@ -211,7 +211,7 @@ main = do
         , layers
           [ fmap undefined sheetStream
           , row
-            [ Space (floor $ frac * sheetWidth, 0)
+            [ space (floor $ frac * sheetWidth, 0)
             , Rectangle (2, systemHeight) (SDL.Color 255 0 0 255)
             ]
           ]

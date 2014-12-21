@@ -16,21 +16,25 @@ import           Foreign.C       (CInt)
 import qualified Graphics.UI.SDL as SDL
 
 data Arrangement a
-  = Empty
-  | Whole SDL.Texture
+  = Whole SDL.Texture
   | Crop SDL.Rect SDL.Texture
   | Rectangle (CInt, CInt) SDL.Color
-  | Space (CInt, CInt)
   | Arrangement a `Beside` Arrangement a -- ^ left, right
   | Arrangement a `Above`  Arrangement a -- ^ above, below
   | Arrangement a `Behind` Arrangement a -- ^ back, front
   | Label a (Arrangement a)
   deriving (Eq, Show, Functor)
 
+zeroSpace :: Arrangement a
+zeroSpace = space (0, 0)
+
+space :: (CInt, CInt) -> Arrangement a
+space (x, y) = Rectangle (x, y) $ SDL.Color 0 0 0 0
+
 row, column, layers :: [Arrangement a] -> Arrangement a
-row    = foldr Beside Empty
-column = foldr Above  Empty
-layers = foldr Behind Empty
+row    = foldr Beside zeroSpace
+column = foldr Above  zeroSpace
+layers = foldr Behind zeroSpace
 
 -- | Given a location, finds the label that it is located in, as well as its
 -- position within the label.
@@ -39,8 +43,6 @@ findLabel (x, y) = \case
   Whole     {} -> pure Nothing
   Crop      {} -> pure Nothing
   Rectangle {} -> pure Nothing
-  Empty     {} -> pure Nothing
-  Space     {} -> pure Nothing
   Label lbl arr -> do
     (w, h) <- getDims arr
     pure $ do
@@ -79,8 +81,6 @@ getDims (a0 `Behind` a1) = do
   pure (max w0 w1, max h0 h1)
 getDims (Rectangle dims _) = pure dims
 getDims (Label _ arr) = getDims arr
-getDims Empty = pure (0, 0)
-getDims (Space dims) = pure dims
 
 getWidth, getHeight :: Arrangement a -> IO CInt
 getWidth  = fmap fst . getDims
@@ -110,10 +110,11 @@ render rend pn arrange = do
         a0 `Behind` a1 -> do
           go (x, y) a0
           go (x, y) a1
+        Rectangle _      (SDL.Color _ _ _ 0) -> pure ()
+        Rectangle (0, _) _                   -> pure ()
+        Rectangle (_, 0) _                   -> pure ()
         Rectangle (w, h) (SDL.Color r g b a) -> do
           zero $ SDL.setRenderDrawColor rend r g b a
           zero $ with (SDL.Rect x y w h) $ SDL.renderDrawRect rend
         Label _ ar -> go (x, y) ar
-        Empty -> pure ()
-        Space {} -> pure ()
   go pn arrange
