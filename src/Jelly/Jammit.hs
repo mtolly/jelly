@@ -1,7 +1,8 @@
 {- |
 Basic types and functions for dealing with Jammit song packages.
 -}
-module Jammit
+{-# LANGUAGE NoImplicitPrelude #-}
+module Jelly.Jammit
 ( Instrument(..)
 , Part(..)
 , AudioPart(..)
@@ -25,19 +26,19 @@ module Jammit
 , sheetWidth, sheetHeight
 ) where
 
-import           Control.Applicative (liftA2, (<$>), (<*>))
-import           Control.Arrow       ((***))
-import           Control.Exception   (evaluate)
-import           Control.Monad       (filterM, guard)
-import           Data.Char           (toLower, toUpper)
-import qualified Data.Map            as Map
-import           Data.Maybe          (catMaybes)
-import qualified Data.PropertyList   as PL
-import qualified System.Directory    as Dir
-import           System.Environment  (lookupEnv)
-import           System.FilePath     ((</>))
-import qualified System.Info         as Info
-import           Text.Read           (readMaybe)
+import           Jelly.Prelude
+
+import           Control.Arrow      ((***))
+import           Control.Exception  (evaluate)
+import           Data.Char          (toLower, toUpper)
+import qualified Data.Map           as Map
+import           Data.Maybe         (catMaybes)
+import qualified Data.PropertyList  as PL
+import qualified System.Directory   as Dir
+import           System.Environment (lookupEnv)
+import           System.FilePath    ((</>))
+import qualified System.Info        as Info
+import           Text.Read          (readMaybe)
 
 -- | The Enum instance corresponds to the number used in the "instrument"
 -- property, and the names (used by Show/Read) are capitalized versions of those
@@ -226,7 +227,7 @@ readXmlPropertyListFromFile' :: FilePath -> IO PL.PropertyList
 readXmlPropertyListFromFile' f = do
   str <- readFile f
   _ <- evaluate $ length str
-  either fail return $ PL.readXmlPropertyList str
+  either error pure $ PL.readXmlPropertyList str
 
 -- | Tries to find the top-level Jammit library directory on Windows or
 -- Mac OS X.
@@ -236,15 +237,15 @@ findJammitDir = case Info.os of
     var <- lookupEnv "LocalAppData"
     case var of
       Just local -> jammitIn local
-      Nothing    -> return Nothing
+      Nothing    -> pure Nothing
   "darwin" -> do
     home <- Dir.getHomeDirectory
     jammitIn $ home </> "Library" </> "Application Support"
-  _ -> return Nothing
+  _ -> pure Nothing
   where jammitIn dir = do
           let jmt = dir </> "Jammit"
           b <- Dir.doesDirectoryExist jmt
-          return $ guard b >> Just jmt
+          pure $ guard b >> Just jmt
 
 -- | Gets the contents of a directory without the @.@ and @..@ special paths,
 -- and adds the directory to the front of all the names to make absolute paths.
@@ -332,7 +333,7 @@ findImages suffix trk dir = do
   files <- Dir.getDirectoryContents dir
   let image i = identifier trk ++ "_" ++ suffix ++ "_" ++ showTwo i
       showTwo i = if i < 10 then '0' : show i else show i
-  return
+  pure
     [ dir </> file
     | file <- map image ([0..99] :: [Int])
     , file `elem` files
@@ -347,7 +348,7 @@ findAudio trk dir = let
   file = dir </> identifier trk ++ "_jcfx"
   in do
     b <- Dir.doesFileExist file
-    return $ guard b >> Just file
+    pure $ guard b >> Just file
 
 sheetWidth, sheetHeight :: (Num a) => a
 sheetWidth  = 724

@@ -3,16 +3,17 @@ An encapsulation of a grid-based GUI, where rows and columns of textures
 are rendered at 1:1 aspect ratio, and specific parts of the grid can be
 labelled with the intent of locating mouse clicks.
 -}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE DeriveFunctor #-}
-module Arrangement where
+{-# LANGUAGE DeriveFunctor     #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+module Jelly.Arrangement where
 
+import           Jelly.Prelude
+import           Jelly.SDL
+
+import           Foreign         (alloca, nullPtr, peek, with)
+import           Foreign.C       (CInt)
 import qualified Graphics.UI.SDL as SDL
-import Foreign
-import Foreign.C
-import Util
-import Control.Applicative
-import Control.Monad
 
 data Arrangement a
   = Empty
@@ -35,14 +36,14 @@ layers = foldr Behind Empty
 -- position within the label.
 findLabel :: (CInt, CInt) -> Arrangement a -> IO (Maybe (a, (CInt, CInt)))
 findLabel (x, y) = \case
-  Whole     {} -> return Nothing
-  Crop      {} -> return Nothing
-  Rectangle {} -> return Nothing
-  Empty     {} -> return Nothing
-  Space     {} -> return Nothing
+  Whole     {} -> pure Nothing
+  Crop      {} -> pure Nothing
+  Rectangle {} -> pure Nothing
+  Empty     {} -> pure Nothing
+  Space     {} -> pure Nothing
   Label lbl arr -> do
     (w, h) <- getDims arr
-    return $ do
+    pure $ do
       guard $ (0 <= x && x < w) && (0 <= y && y < h)
       Just (lbl, (x, y))
   a0 `Beside` a1 -> do
@@ -56,30 +57,30 @@ findLabel (x, y) = \case
       then findLabel (x, y    ) a0
       else findLabel (x, y - h) a1
   a0 `Behind` a1 -> findLabel (x, y) a1 >>= \case
-    Just res -> return $ Just res
+    Just res -> pure $ Just res
     Nothing  -> findLabel (x, y) a0
 
 getDims :: Arrangement a -> IO (CInt, CInt)
 getDims (Whole tex) = alloca $ \pw -> alloca $ \ph -> do
   zero $ SDL.queryTexture tex nullPtr nullPtr pw ph
   liftA2 (,) (peek pw) (peek ph)
-getDims (Crop (SDL.Rect _ _ w h) _) = return (w, h)
+getDims (Crop (SDL.Rect _ _ w h) _) = pure (w, h)
 getDims (a0 `Beside` a1) = do
   (w0, h0) <- getDims a0
   (w1, h1) <- getDims a1
-  return (w0 + w1, max h0 h1)
+  pure (w0 + w1, max h0 h1)
 getDims (a0 `Above` a1) = do
   (w0, h0) <- getDims a0
   (w1, h1) <- getDims a1
-  return (max w0 w1, h0 + h1)
+  pure (max w0 w1, h0 + h1)
 getDims (a0 `Behind` a1) = do
   (w0, h0) <- getDims a0
   (w1, h1) <- getDims a1
-  return (max w0 w1, max h0 h1)
-getDims (Rectangle dims _) = return dims
+  pure (max w0 w1, max h0 h1)
+getDims (Rectangle dims _) = pure dims
 getDims (Label _ arr) = getDims arr
-getDims Empty = return (0, 0)
-getDims (Space dims) = return dims
+getDims Empty = pure (0, 0)
+getDims (Space dims) = pure dims
 
 getWidth, getHeight :: Arrangement a -> IO CInt
 getWidth  = fmap fst . getDims
@@ -113,6 +114,6 @@ render rend pn arrange = do
           zero $ SDL.setRenderDrawColor rend r g b a
           zero $ with (SDL.Rect x y w h) $ SDL.renderDrawRect rend
         Label _ ar -> go (x, y) ar
-        Empty -> return ()
-        Space {} -> return ()
+        Empty -> pure ()
+        Space {} -> pure ()
   go pn arrange

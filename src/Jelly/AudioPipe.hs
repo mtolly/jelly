@@ -7,42 +7,47 @@ A self-contained audio playback machine.
 Currently assumes all audio files are stereo, 44.1 kHz.
 
 -}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE FlexibleContexts #-}
-module AudioPipe
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE RankNTypes        #-}
+module Jelly.AudioPipe
 ( AudioPipe, withPipe, seekTo, playPause, setVolumes
 ) where
 
-import Control.Exception (bracket)
-import qualified Sound.OpenAL as AL
-import Sound.OpenAL (($=))
-import Control.Monad (forM, forM_, liftM2, when)
-import Data.List (nub, elemIndex, foldl1')
-import qualified Data.Vector.Storable as V
-import qualified Sound.File.Sndfile as Snd
+import           Jelly.Prelude
+
+import           Control.Arrow                    ((***))
+import           Control.Concurrent               (forkIO, threadDelay)
+import           Control.Concurrent.MVar          (MVar, isEmptyMVar,
+                                                   newEmptyMVar, newMVar,
+                                                   readMVar, tryPutMVar)
+import           Control.Exception                (bracket, bracket_)
+import           Control.Monad.Fix                (fix)
+import           Control.Monad.IO.Class           (MonadIO, liftIO)
+import           Data.Conduit                     (($$), (=$=))
+import qualified Data.Conduit                     as C
+import qualified Data.Conduit.List                as CL
+import           Data.Int                         (Int16)
+import           Data.IORef                       (IORef, newIORef, readIORef,
+                                                   writeIORef)
+import           Data.List                        (elemIndex, foldl1', nub)
+import qualified Data.Set                         as Set
+import qualified Data.Vector.Storable             as V
+import           Foreign                          (sizeOf)
+import qualified Sound.File.Sndfile               as Snd
 import qualified Sound.File.Sndfile.Buffer.Vector as SndV
-import qualified Sound.RubberBand as RB
-import Control.Concurrent.MVar
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Arrow ((***))
-import Data.IORef (IORef, readIORef, writeIORef, newIORef)
-import Control.Monad.IO.Class (MonadIO, liftIO)
-import qualified Data.Conduit as C
-import Data.Conduit ((=$=), ($$))
-import qualified Data.Conduit.List as CL
-import Control.Monad.Fix (fix)
-import Data.Int (Int16)
-import qualified Data.Set as Set
-import Foreign (sizeOf)
+import           Sound.OpenAL                     (($=))
+import qualified Sound.OpenAL                     as AL
+import qualified Sound.RubberBand                 as RB
 
 type Stoppable = (MVar (), MVar ())
 
 newStoppable :: IO Stoppable
-newStoppable = liftM2 (,) newEmptyMVar newEmptyMVar
+newStoppable = liftA2 (,) newEmptyMVar newEmptyMVar
 
 newStopped :: IO Stoppable
-newStopped = liftM2 (,) (newMVar ()) (newMVar ())
+newStopped = liftA2 (,) (newMVar ()) (newMVar ())
 
 stop :: Stoppable -> IO ()
 stop s = do
@@ -52,7 +57,7 @@ stop s = do
 requestStop :: Stoppable -> IO ()
 requestStop (v1, _) = do
   _ <- tryPutMVar v1 ()
-  return ()
+  pure ()
 
 waitTillStopped :: Stoppable -> IO ()
 waitTillStopped (_, v2) = readMVar v2
@@ -63,7 +68,7 @@ stopRequested (v1, _ ) = fmap not $ isEmptyMVar v1
 markStopped :: Stoppable -> IO ()
 markStopped (_, v2) = do
   _ <- tryPutMVar v2 ()
-  return ()
+  pure ()
 
 data AudioPipe = AudioPipe
   { handles_ :: [Snd.Handle]
@@ -104,7 +109,7 @@ makePipe lenmax lenmin ins = do
         (pos, neg) <- insNumbered
         let pos' = map (loaded !!) pos
             neg' = map (V.map negate *** V.map negate) $ map (loaded !!) neg
-        return $ foldl1'
+        pure $ foldl1'
           (\(l1, r1) (l2, r2) -> (V.zipWith (+) l1 l2, V.zipWith (+) r1 r2))
           $ pos' ++ neg'
   filler <- newStopped >>= newIORef
@@ -121,7 +126,7 @@ makePipe lenmax lenmin ins = do
         , full_   = full
         }
   seekTo 0 1 pipe
-  return pipe
+  pure pipe
 
 closePipe :: AudioPipe -> IO ()
 closePipe pipe = do
@@ -131,7 +136,22 @@ closePipe pipe = do
   forM_ (sources_ pipe) $ \(srcL, srcR) -> AL.deleteObjectNames [srcL, srcR]
 
 withPipe :: Double -> Double -> [Input] -> (AudioPipe -> IO a) -> IO a
-withPipe lenmax lenmin ins = bracket (makePipe lenmax lenmin ins) closePipe
+withPipe lenmax lenmin ins = withALContext
+  . bracket (makePipe lenmax lenmin ins) closePipe
+
+withALContext :: IO a -> IO a
+withALContext act = bracket
+  — AL.openDevice Nothing
+    >>= maybe (error "couldn't open audio device") pure
+  — AL.closeDevice
+  — \dev -> bracket
+    — AL.createContext dev []
+      >>= maybe (error "couldn't create audio context") pure
+    — AL.destroyContext
+    — \ctxt -> bracket_
+      — AL.currentContext $= Just ctxt
+      — AL.currentContext $= Nothing
+      — act
 
 -- | If paused, seeks to the new position and begins queueing data.
 -- If playing, pauses, seeks to the new position, and plays once data is queued.
@@ -180,7 +200,7 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
               p <- liftIO $ fmap sum $ forM (head bufsRemoved) $ \buf -> do
                 AL.BufferData (AL.MemoryRegion _ size) _ _
                   <- AL.get $ AL.bufferData buf
-                return $ fromIntegral size `quot` 2
+                pure $ fromIntegral size `quot` 2
               let q' = q - p
                   bufs' = Set.difference bufs $ Set.fromList $ concat bufsRemoved
               liftIO $ AL.deleteObjectNames $ concat bufsRemoved
@@ -210,7 +230,7 @@ makeBuffer v = do
     let mem = AL.MemoryRegion p $ fromIntegral vsize
         vsize = V.length v * sizeOf (v V.! 0)
     AL.bufferData buf $= AL.BufferData mem AL.Mono16 44100
-  return buf
+  pure buf
 
 -- | Translates samples from floats (Rubber Band) to 16-bit ints (OpenAL).
 convert :: (Monad m) => C.Conduit [V.Vector Float] m [V.Vector Int16]
@@ -263,11 +283,11 @@ stretch a b c d = do
   s <- liftIO $ RB.new a b opts c d
   liftIO $ RB.setMaxProcessSize s loadBlockSize
   fix $ \loop -> liftIO (RB.available s) >>= \case
-    Nothing -> return () -- shouldn't happen?
+    Nothing -> pure () -- shouldn't happen?
     Just 0 -> liftIO (RB.getSamplesRequired s) >>= \case
       0 -> shortWait >> loop
       _ -> C.await >>= \case
-        Nothing    -> return ()
+        Nothing    -> pure ()
         Just block -> do
           forM_ (breakBlock loadBlockSize block) $ \blk ->
             liftIO $ RB.process s blk False
@@ -311,4 +331,4 @@ deinterleave :: (V.Storable a)
 deinterleave n v = do
   let len = V.length v `div` n
   i <- [0 .. n - 1]
-  return $ V.generate len $ \j -> v V.! (n * j + i)
+  pure $ V.generate len $ \j -> v V.! (n * j + i)

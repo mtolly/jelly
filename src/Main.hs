@@ -1,54 +1,49 @@
-{-# LANGUAGE LambdaCase      #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE CPP             #-}
+{-# LANGUAGE CPP               #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE PatternSynonyms   #-}
 module Main (main) where
 
-import           Control.Applicative     ((<$>), liftA2)
-import           Control.Concurrent      (threadDelay)
-import           Control.Exception       (bracket, bracket_)
-import           Control.Monad           (forM, guard)
-import           Data.Char               (toLower)
-import           Data.List               (elemIndex, intercalate, nub, transpose)
-import           Data.Maybe              (fromJust)
-import           Foreign                 (Word32, alloca, peek, (.|.))
-import           Foreign.C               (CInt, withCString)
-import qualified Graphics.UI.SDL         as SDL
-import qualified Graphics.UI.SDL.Image   as Image
-import           Sound.OpenAL            (($=))
-import qualified Sound.OpenAL            as AL
-import           System.FilePath         ((<.>), (</>))
+import           Jelly.Arrangement
+import           Jelly.AudioPipe
+import           Jelly.Jammit
+import           Jelly.Prelude
+import           Jelly.SDL
 
-import           Jammit
-import           AudioPipe
-import           Util
-import           Arrangement
+import           Control.Concurrent         (threadDelay)
+import           Data.Char                  (toLower)
+import           Data.List                  (elemIndex, intercalate, nub,
+                                             transpose)
+import           Data.Maybe                 (fromJust)
+import           Foreign                    (alloca, peek)
+import qualified Graphics.UI.SDL            as SDL
+import qualified Graphics.UI.SDL.Image      as Image
+import           System.Environment         (getArgs, getProgName)
+import           System.FilePath            ((<.>), (</>))
 
-import System.Environment (getArgs, getProgName)
 #ifndef LOCALRESOURCES
-import Paths_jelly (getDataFileName)
+import           Paths_jelly                (getDataFileName)
 #else
-import System.Environment.FindBin (getProgPath)
+import           System.Environment.FindBin (getProgPath)
 
 getDataFileName :: FilePath -> IO FilePath
-getDataFileName fp = do
-  bin <- getProgPath
-  return $ bin </> fp
+getDataFileName fp = (</> fp) <$> getProgPath
 #endif
 
 -- | State that doesn't change once everything is loaded
 data Static = Static
-  { window_ :: SDL.Window
-  , renderer_ :: SDL.Renderer
-  , audioPipe_ :: AudioPipe
+  { window_     :: SDL.Window
+  , renderer_   :: SDL.Renderer
+  , audioPipe_  :: AudioPipe
   , audioParts_ :: [Maybe Part]
   , sheetParts_ :: [(SheetPart, [Arrangement ()])]
-  , beats_ :: [Beat]
-  , getImage_ :: String -> SDL.Texture
+  , beats_      :: [Beat]
+  , getImage_   :: String -> SDL.Texture
   }
 
 withLoad :: [FilePath] -> (Static -> IO a) -> IO a
-withLoad songs act = withALContext
-  $ withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
+withLoad songs act
+  = withSDL [SDL.SDL_INIT_TIMER, SDL.SDL_INIT_VIDEO]
   $ withSDLImage [Image.InitPNG]
   $ withWindowAndRenderer "Jelly" sheetWidth 480 SDL.SDL_WINDOW_RESIZABLE
   $ \window rend -> do
@@ -58,10 +53,10 @@ withLoad songs act = withALContext
   Just bts     <- loadBeats $ head songs
 
   theTitle <- case nub $ map title allInfo of
-    [x] -> return x
+    [x] -> pure x
     xs -> error $ "Different song titles: " ++ show xs
   _ <- case nub $ map artist allInfo of
-    [x] -> return x
+    [x] -> pure x
     xs -> error $ "Different song artists: " ++ show xs
   let theInstruments = map instrument allInfo
 
@@ -70,23 +65,23 @@ withLoad songs act = withALContext
         trk <- instTrks
         guard $ trackClass trk == "JMFileTrack"
         let Just apart = titleToAudioPart (fromJust $ trackTitle trk) inst
-        return (song, apart, trk)
+        pure (song, apart, trk)
 
   sheets <- fmap concat $ forM fileTrks $ \(song, apart, trk) -> case apart of
-    Without _ -> return []
+    Without _ -> pure []
     Only part -> do
       let findRows f = do
             pages <- f trk song
             Right texs <- sequence <$> mapM (Image.imgLoadTexture rend) pages
-            return $ splitRows' trk texs
+            pure $ splitRows' trk texs
       notes <- findRows findNotation
       tab   <- findRows findTab
-      return $ if null tab
+      pure $ if null tab
         then [(Notation part, notes)]
         else [(Notation part, notes), (Tab part, tab)]
   audio <- forM fileTrks $ \(song, apart, trk) -> do
     Just aud <- findAudio trk song
-    return (apart, aud)
+    pure (apart, aud)
 
   let toggleImages = (++)
         — map (map toLower . drop 4 . show) ([minBound .. maxBound] :: [Part])
@@ -96,7 +91,7 @@ withLoad songs act = withALContext
   images <- forM allImages $ \img -> do
     dataLoc <- getDataFileName $ "resources" </> img <.> "png"
     Image.imgLoadTexture rend dataLoc >>= \case
-      Right tex -> return (img, tex)
+      Right tex -> pure (img, tex)
       Left err -> error $ "Error in loading image (" ++ dataLoc ++ "): " ++ show err
   let getImage str = case lookup str images of
         Just img -> img
@@ -113,7 +108,7 @@ withLoad songs act = withALContext
       normalNegative = do
         (p, f) <- normalAudio
         guard $ partToInstrument p /= fst bestBack
-        return f
+        pure f
       labels = map (Just . fst) normalAudio ++ [Nothing]
       inputs :: [([FilePath], [FilePath])]
       inputs = [ ([f], []) | (_, f) <- normalAudio ] ++ [([snd bestBack], normalNegative)]
@@ -143,7 +138,7 @@ main = do
 
   songs <- getArgs >>= \case
     []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
-    songs -> return songs
+    songs -> pure songs
 
   withLoad songs $ \static -> let
     rend = renderer_ static
@@ -153,13 +148,13 @@ main = do
       let ss = stopState ps
       tend <- fromIntegral <$> SDL.getTicks
       let diffSeconds = fromIntegral (tend - startTicks ps) / 1000
-      return $ audioPosn ss + diffSeconds / playSpeed ss
+      pure $ audioPosn ss + diffSeconds / playSpeed ss
 
     start ss = do
       playPause $ audioPipe_ static
       -- Mark the sdl ticks when we started audio
       starttks <- fromIntegral <$> SDL.getTicks
-      return $ PlayState
+      pure $ PlayState
         { startTicks  = starttks
         , stopState   = ss
         }
@@ -167,7 +162,7 @@ main = do
     stop ps = do
       playPause $ audioPipe_ static
       newpn <- updatePosition ps
-      return $ (stopState ps) { audioPosn = newpn }
+      pure $ (stopState ps) { audioPosn = newpn }
 
     menu s = row
       [ Label PlayPause $ Whole $ getImage $ case s of
@@ -185,18 +180,18 @@ main = do
               filename = case sheet of
                 Notation p -> partToFile p
                 Tab p -> partToFile p ++ "tab"
-          return $ Label (ToggleSheet sheet) $ Whole $ getImage $ prefix ++ filename
+          pure $ Label (ToggleSheet sheet) $ Whole $ getImage $ prefix ++ filename
         , row $ do
           (apart, gain) <- zip (audioParts_ static) $ audioGains $ getStopState s
           let prefix = if gain /= 0 then "" else "no_"
               filename = maybe "band" partToFile apart
-          return $ Label (ToggleAudio apart) $ Whole $ getImage $ prefix ++ filename
+          pure $ Label (ToggleAudio apart) $ Whole $ getImage $ prefix ++ filename
         ]
       ] where partToFile = map toLower . drop 4 . show
 
     draw s = do
       pn <- case s of
-        Stopped StopState{audioPosn = pn} -> return pn
+        Stopped StopState{audioPosn = pn} -> pure pn
         Playing playstate -> updatePosition playstate
       let (rowN, frac) = rowNumber (beats_ static) pn
           sheetsToDraw = map snd $ filter fst
@@ -238,7 +233,7 @@ main = do
       s' = setStopState (ss { audioGains = gains' }) s
       in do
         setVolumes gains' $ audioPipe_ static
-        return s'
+        pure s'
     updateNth i x xs = case splitAt i xs of
       (ys, zs) -> ys ++ [x] ++ drop 1 zs
     flipNth i = zipWith ($) $ updateNth i not $ repeat id
@@ -253,25 +248,25 @@ main = do
     runCommand cmd s = case cmd of
       ToggleSheet sp -> let
         Just i = elemIndex sp $ map fst $ sheetParts_ static
-        in return $ toggleSheet i s
+        in pure $ toggleSheet i s
       ToggleAudio aud -> let
         Just i = elemIndex aud $ audioParts_ static
         in toggleVolume i s
       ToggleSlow -> whileStopped s $ \ss -> do
         let newSpeed = if playSpeed ss == 1 then 1.25 else 1
         seekTo (audioPosn ss) newSpeed $ audioPipe_ static
-        return $ ss { playSpeed = newSpeed }
+        pure $ ss { playSpeed = newSpeed }
       PlayPause -> case s of
-        Playing ps -> stop  ps >>= return . Stopped
-        Stopped ss -> start ss >>= return . Playing
+        Playing ps -> stop  ps >>= pure . Stopped
+        Stopped ss -> start ss >>= pure . Playing
       MoveLeft -> whileStopped s $ \ss -> do
         let newPosn = max 0 $ audioPosn ss - 5
         seekTo newPosn (playSpeed ss) $ audioPipe_ static
-        return $ ss { audioPosn = newPosn }
+        pure $ ss { audioPosn = newPosn }
       MoveRight -> whileStopped s $ \ss -> do
         let newPosn = audioPosn ss + 5
         seekTo newPosn (playSpeed ss) $ audioPipe_ static
-        return $ ss { audioPosn = newPosn }
+        pure $ ss { audioPosn = newPosn }
     eloop s = pollEvent >>= \case
       Just (SDL.QuitEvent {}) -> quit
       Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
@@ -314,8 +309,8 @@ main = do
             toggleSpeed = runCommand ToggleSlow s >>= eloop
             togglePlaying = runCommand PlayPause s >>= eloop
             quit = case s of
-              Playing ps -> stop ps >> return ()
-              Stopped _  -> return ()
+              Playing ps -> stop ps >>= \_ss -> pure ()
+              Stopped _  -> pure ()
 
     in loop $ Stopped StopState
       { audioPosn  = 0
@@ -332,8 +327,8 @@ data StopState = StopState
   } deriving (Eq, Ord, Show, Read)
 
 data PlayState = PlayState
-  { startTicks  :: Int -- sdl ticks
-  , stopState   :: StopState
+  { startTicks :: Int -- sdl ticks
+  , stopState  :: StopState
   } deriving (Eq)
 
 data State
@@ -359,52 +354,11 @@ pattern KeyPress scan <- SDL.KeyboardEvent
   , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
   }
 
-withSDL :: [SDL.InitFlag] -> IO a -> IO a
-withSDL flags = bracket_
-  — do zero $ SDL.init $ foldr (.|.) 0 flags
-  — SDL.quit
-
-withSDLImage :: [Image.InitFlag] -> IO a -> IO a
-withSDLImage flags = bracket_
-  — Image.imgInit flags
-  — Image.imgQuit
-
-withWindowAndRenderer :: String -> CInt -> CInt -> Word32
-  -> (SDL.Window -> SDL.Renderer -> IO a) -> IO a
-withWindowAndRenderer name w h flags act = bracket
-  — do
-    withCString name $ \s -> notNull $ SDL.createWindow
-      s -- title
-      SDL.SDL_WINDOWPOS_UNDEFINED -- x
-      SDL.SDL_WINDOWPOS_UNDEFINED -- y
-      w -- width
-      h -- height
-      flags -- flags
-  — SDL.destroyWindow
-  — \window -> bracket
-    — do notNull $ SDL.createRenderer window (-1) 0
-    — SDL.destroyRenderer
-    — \renderer -> act window renderer
-
-withALContext :: IO a -> IO a
-withALContext act = bracket
-  — AL.openDevice Nothing
-    >>= maybe (error "couldn't open audio device") return
-  — AL.closeDevice
-  — \dev -> bracket
-    — AL.createContext dev []
-      >>= maybe (error "couldn't create audio context") return
-    — AL.destroyContext
-    — \ctxt -> bracket_
-      — AL.currentContext $= Just ctxt
-      — AL.currentContext $= Nothing
-      — act
-
 -- | Returns Just an event if there is one currently in the queue.
 pollEvent :: IO (Maybe SDL.Event)
 pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
   1 -> Just <$> peek pevt
-  _ -> return Nothing
+  _ -> pure Nothing
 
 splitRows' :: Track -> [SDL.Texture] -> [Arrangement a]
 splitRows' trk texs = map f $ splitRows trk texs where
