@@ -1,10 +1,12 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE PatternSynonyms   #-}
 module Jelly.SDL where
 
 import           Jelly.Prelude
 
 import           Control.Exception     (bracket, bracket_)
-import           Foreign               (Ptr, Word32, nullPtr, (.|.))
+import           Foreign               (Ptr, Word32, alloca, nullPtr, peek, (.|.))
 import           Foreign.C             (CInt, peekCString, withCString)
 import qualified Graphics.UI.SDL       as SDL
 import qualified Graphics.UI.SDL.Image as Image
@@ -49,3 +51,15 @@ withWindowAndRenderer name w h flags act = bracket
     — do notNull $ SDL.createRenderer window (-1) 0
     — SDL.destroyRenderer
     — \renderer -> act window renderer
+
+-- | Returns Just an event if there is one currently in the queue.
+pollEvent :: IO (Maybe SDL.Event)
+pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
+  1 -> Just <$> peek pevt
+  _ -> pure Nothing
+
+pattern KeyPress scan <- SDL.KeyboardEvent
+  { SDL.eventType           = SDL.SDL_KEYDOWN
+  , SDL.keyboardEventRepeat = 0
+  , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
+  }

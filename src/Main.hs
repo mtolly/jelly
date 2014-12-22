@@ -187,6 +187,19 @@ data Volatile = Volatile
 L.makeLenses ''Volatile
 type App = StateT Volatile IO
 
+isPlaying :: App Bool
+isPlaying = fmap isJust $ L.use startTicks
+
+currentPosn :: App Double
+currentPosn = do
+  sp <- L.use stoppedPosn
+  L.use startTicks >>= \case
+    Nothing -> pure sp
+    Just tks -> do
+      now <- SDL.getTicks
+      let diffSeconds = fromIntegral (now - tks) / 1000
+      pure $ sp + diffSeconds
+
 main :: IO ()
 main = do
 
@@ -197,19 +210,6 @@ main = do
   withLoad songs $ \static -> let
     rend = renderer_ static
     getImage = getImage_ static
-
-    isPlaying :: App Bool
-    isPlaying = fmap isJust $ L.use startTicks
-
-    currentPosn :: App Double
-    currentPosn = do
-      sp <- L.use stoppedPosn
-      L.use startTicks >>= \case
-        Nothing -> pure sp
-        Just tks -> do
-          now <- SDL.getTicks
-          let diffSeconds = fromIntegral (now - tks) / 1000
-          pure $ sp + diffSeconds
 
     start :: App ()
     start = do
@@ -323,7 +323,7 @@ main = do
 
     eloop :: App ()
     eloop = liftIO pollEvent >>= \case
-      Just (SDL.QuitEvent {}) -> quit
+      Just (SDL.QuitEvent {}) -> isPlaying >>= \b -> when b stop
       Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
         -- Let user adjust height, but make width to at least sheetWidth
         (width, height) <- liftIO $ alloca $ \pw -> alloca $ \ph -> do
@@ -331,10 +331,10 @@ main = do
           liftA2 (,) (peek pw) (peek ph)
         SDL.setWindowSize (window_ static) (max sheetWidth width) height
         eloop
-      Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> togglePlaying
-      Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> moveLeft
-      Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> moveRight
-      Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> toggleSpeed
+      Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> runCommand PlayPause >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> runCommand MoveLeft >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> runCommand MoveRight >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> runCommand ToggleSlow >> eloop
       Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 >> eloop
       Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 >> eloop
       Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 >> eloop
@@ -359,11 +359,6 @@ main = do
           Nothing       -> eloop
       Just _  -> eloop
       Nothing -> loop
-      where moveLeft = runCommand MoveLeft >> eloop
-            moveRight = runCommand MoveRight >> eloop
-            toggleSpeed = runCommand ToggleSlow >> eloop
-            togglePlaying = runCommand PlayPause >> eloop
-            quit = isPlaying >>= \b -> when b stop
 
     initialVolatile = Volatile
       { _stoppedPosn = 0
@@ -374,15 +369,3 @@ main = do
       }
 
     in evalStateT loop initialVolatile
-
-pattern KeyPress scan <- SDL.KeyboardEvent
-  { SDL.eventType           = SDL.SDL_KEYDOWN
-  , SDL.keyboardEventRepeat = 0
-  , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
-  }
-
--- | Returns Just an event if there is one currently in the queue.
-pollEvent :: IO (Maybe SDL.Event)
-pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
-  1 -> Just <$> peek pevt
-  _ -> pure Nothing
