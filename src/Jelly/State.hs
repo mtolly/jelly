@@ -1,14 +1,16 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Jelly.State where
 
 import Data.Word (Word32)
 import qualified Control.Lens as L
 import Control.Lens.Operators ((^.))
-import Control.Monad.Trans.RWS (RWST)
+import Control.Monad.Trans.RWS (RWST, evalRWST)
 import qualified Graphics.UI.SDL as SDL
 import Jelly.Jammit
 import Jelly.AudioPipe
 import Jelly.Arrangement
+import Jelly.Prelude
 
 -- | State that doesn't change once everything is loaded
 data Static = Static
@@ -42,3 +44,8 @@ initialVolatile static = Volatile
   , _sheetShow   = zipWith const (True : repeat False) $ static ^. sheetParts
   , _startTicks  = Nothing
   }
+
+evalApp :: (Applicative m, Monad m) => RWST r () s m a -> r -> s -> m a
+evalApp f r s = do
+  (x, ()) <- evalRWST f r s
+  pure x

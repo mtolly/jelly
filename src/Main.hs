@@ -14,13 +14,13 @@ import           Jelly.State
 import           Control.Concurrent         (threadDelay)
 import qualified Control.Lens as L
 import           Control.Lens.Operators     ((.=), (%=), (+=), (^.))
-import           Control.Monad.IO.Class     (liftIO)
-import           Control.Monad.Trans.RWS    (ask, asks, evalRWST, get)
+import           Control.Monad.IO.Class     (MonadIO, liftIO)
+import           Control.Monad.Trans.RWS    (ask, asks, get)
 import           Data.Char                  (toLower)
 import           Data.List                  (elemIndex, intercalate, nub,
                                              transpose)
 import           Data.Maybe                 (fromJust, isJust)
-import           Foreign                    (alloca, peek)
+import           Foreign                    (Word32, alloca, peek)
 import qualified Graphics.UI.SDL            as SDL
 import qualified Graphics.UI.SDL.Image      as Image
 import           System.Environment         (getArgs, getProgName)
@@ -291,58 +291,60 @@ runCommand cmd = case cmd of
     stoppedPosn += 5
     updateSeek
 
+limitTicks :: (MonadIO m) => Word32 -> (m () -> m ()) -> m ()
+limitTicks n f = do
+  tstart <- SDL.getTicks
+  f $ do
+    tend <- SDL.getTicks
+    let waitMilli = max 0 $ tend - tstart
+    liftIO $ threadDelay $ fromIntegral waitMilli * 1000
+    limitTicks n f
+
+eloop :: App () -> App ()
+eloop next = liftIO pollEvent >>= \case
+  Just (SDL.QuitEvent {}) -> isPlaying >>= \b -> when b stop
+  Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
+    -- Let user adjust height, but make width to at least sheetWidth
+    wind <- asks (^. window)
+    (width, height) <- liftIO $ alloca $ \pw -> alloca $ \ph -> do
+      SDL.getWindowSize wind pw ph
+      liftA2 (,) (peek pw) (peek ph)
+    SDL.setWindowSize wind (max sheetWidth width) height
+    eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> runCommand PlayPause >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> runCommand MoveLeft >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> runCommand MoveRight >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> runCommand ToggleSlow >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_V) -> toggleVolume 3 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_B) -> toggleVolume 4 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_N) -> toggleVolume 5 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_M) -> toggleVolume 6 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_A) -> toggleSheet 0 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_S) -> toggleSheet 1 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_D) -> toggleSheet 2 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_F) -> toggleSheet 3 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_G) -> toggleSheet 4 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_H) -> toggleSheet 5 >> eloop next
+  Just (KeyPress SDL.SDL_SCANCODE_J) -> toggleSheet 6 >> eloop next
+  Just (SDL.MouseButtonEvent
+    { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
+    , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
+    , SDL.mouseButtonEventX = mx
+    , SDL.mouseButtonEventY = my
+    }) -> menu >>= liftIO . findLabel (fromIntegral mx, fromIntegral my) >>= \case
+      Just (act, _) -> runCommand act >> eloop next
+      Nothing       -> eloop next
+  Just _  -> eloop next
+  Nothing -> next
+
 main :: IO ()
 main = do
-
   songs <- getArgs >>= \case
     []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
     songs -> pure songs
-
   withLoad songs $ \static -> let
-
-    loop :: App ()
-    loop = draw >> liftIO (threadDelay 16000) >> eloop
-
-    eloop :: App ()
-    eloop = liftIO pollEvent >>= \case
-      Just (SDL.QuitEvent {}) -> isPlaying >>= \b -> when b stop
-      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-        -- Let user adjust height, but make width to at least sheetWidth
-        wind <- asks (^. window)
-        (width, height) <- liftIO $ alloca $ \pw -> alloca $ \ph -> do
-          SDL.getWindowSize wind pw ph
-          liftA2 (,) (peek pw) (peek ph)
-        SDL.setWindowSize wind (max sheetWidth width) height
-        eloop
-      Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> runCommand PlayPause >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> runCommand MoveLeft >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> runCommand MoveRight >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> runCommand ToggleSlow >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_V) -> toggleVolume 3 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_B) -> toggleVolume 4 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_N) -> toggleVolume 5 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_M) -> toggleVolume 6 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_A) -> toggleSheet 0 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_S) -> toggleSheet 1 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_D) -> toggleSheet 2 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_F) -> toggleSheet 3 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_G) -> toggleSheet 4 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_H) -> toggleSheet 5 >> eloop
-      Just (KeyPress SDL.SDL_SCANCODE_J) -> toggleSheet 6 >> eloop
-      Just (SDL.MouseButtonEvent
-        { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
-        , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
-        , SDL.mouseButtonEventX = mx
-        , SDL.mouseButtonEventY = my
-        }) -> menu >>= liftIO . findLabel (fromIntegral mx, fromIntegral my) >>= \case
-          Just (act, _) -> runCommand act >> eloop
-          Nothing       -> eloop
-      Just _  -> eloop
-      Nothing -> loop
-
-    in do
-      ((), ()) <- evalRWST loop static $ initialVolatile static
-      pure ()
+    loop = limitTicks 20 $ \next -> draw >> eloop next
+    in evalApp loop static $ initialVolatile static
