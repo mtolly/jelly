@@ -25,6 +25,7 @@ executable jelly
     Jelly.SDL
     Jelly.Arrangement
     Jelly.Prelude
+    Jelly.State
   default-language: Haskell2010
   ghc-options: -Wall -threaded
   build-depends:
