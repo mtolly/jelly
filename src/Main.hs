@@ -197,8 +197,9 @@ currentPosn = do
     Nothing -> pure sp
     Just tks -> do
       now <- SDL.getTicks
+      speed <- L.use playSpeed
       let diffSeconds = fromIntegral (now - tks) / 1000
-      pure $ sp + diffSeconds
+      pure $ sp + diffSeconds / speed
 
 main :: IO ()
 main = do
