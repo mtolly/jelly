@@ -2,6 +2,7 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternSynonyms   #-}
+{-# LANGUAGE TemplateHaskell   #-}
 module Main (main) where
 
 import           Jelly.Arrangement
@@ -11,11 +12,15 @@ import           Jelly.Prelude
 import           Jelly.SDL
 
 import           Control.Concurrent         (threadDelay)
+import qualified Control.Lens as L
+import           Control.Lens.Operators     ((.=), (%=), (+=))
+import           Control.Monad.IO.Class     (liftIO)
+import           Control.Monad.Trans.State  (StateT, evalStateT, get)
 import           Data.Char                  (toLower)
 import           Data.List                  (elemIndex, intercalate, nub,
                                              transpose)
-import           Data.Maybe                 (fromJust)
-import           Foreign                    (alloca, peek)
+import           Data.Maybe                 (fromJust, isJust)
+import           Foreign                    (Word32, alloca, peek)
 import qualified Graphics.UI.SDL            as SDL
 import qualified Graphics.UI.SDL.Image      as Image
 import           System.Environment         (getArgs, getProgName)
@@ -124,242 +129,6 @@ withLoad songs act
       , getImage_ = getImage
       }
 
-data Command
-  = ToggleSheet SheetPart
-  | ToggleAudio (Maybe Part)
-  | ToggleSlow
-  | PlayPause
-  | MoveLeft
-  | MoveRight
-  deriving (Eq, Ord, Show, Read)
-
-main :: IO ()
-main = do
-
-  songs <- getArgs >>= \case
-    []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
-    songs -> pure songs
-
-  withLoad songs $ \static -> let
-    rend = renderer_ static
-    getImage = getImage_ static
-
-    updatePosition ps = do
-      let ss = stopState ps
-      tend <- fromIntegral <$> SDL.getTicks
-      let diffSeconds = fromIntegral (tend - startTicks ps) / 1000
-      pure $ audioPosn ss + diffSeconds / playSpeed ss
-
-    start ss = do
-      playPause $ audioPipe_ static
-      -- Mark the sdl ticks when we started audio
-      starttks <- fromIntegral <$> SDL.getTicks
-      pure $ PlayState
-        { startTicks  = starttks
-        , stopState   = ss
-        }
-
-    stop ps = do
-      playPause $ audioPipe_ static
-      newpn <- updatePosition ps
-      pure $ (stopState ps) { audioPosn = newpn }
-
-    menu s = row
-      [ Label PlayPause $ Whole $ getImage $ case s of
-        Stopped _ -> "play"
-        Playing _ -> "stop"
-      , Label MoveLeft $ Whole $ getImage "left"
-      , Label MoveRight $ Whole $ getImage "right"
-      , Label ToggleSlow $ Whole $ getImage $ case playSpeed $ getStopState s of
-        1 -> "no_slow"
-        _ -> "slow"
-      , column
-        [ row $ do
-          ((sheet, _), isShown) <- zip (sheetParts_ static) $ sheetShow $ getStopState s
-          let prefix = if isShown then "" else "no_"
-              filename = case sheet of
-                Notation p -> partToFile p
-                Tab p -> partToFile p ++ "tab"
-          pure $ Label (ToggleSheet sheet) $ Whole $ getImage $ prefix ++ filename
-        , row $ do
-          (apart, gain) <- zip (audioParts_ static) $ audioGains $ getStopState s
-          let prefix = if gain /= 0 then "" else "no_"
-              filename = maybe "band" partToFile apart
-          pure $ Label (ToggleAudio apart) $ Whole $ getImage $ prefix ++ filename
-        ]
-      ] where partToFile = map toLower . drop 4 . show
-
-    draw s = do
-      pn <- case s of
-        Stopped StopState{audioPosn = pn} -> pure pn
-        Playing playstate -> updatePosition playstate
-      let (rowN, frac) = rowNumber (beats_ static) pn
-          sheetsToDraw = map snd $ filter fst
-            $ zip (sheetShow $ getStopState s) $ sheetParts_ static
-          sheetStream :: Arrangement ()
-          sheetStream = column $ case sheetsToDraw of
-            [sheet] -> drop rowN $ snd sheet
-            _ -> intercalate [Whole $ getImage "divider"] $
-              transpose $ map (drop rowN . snd) sheetsToDraw
-          thisMenu = menu s
-      systemHeight <- fmap sum $ forM sheetsToDraw $ \sheet ->
-        fmap snd $ getDims $ head $ snd sheet
-      zero $ SDL.setRenderDrawColor rend 0 0 0 255
-      zero $ SDL.renderClear rend
-      render rend (0, 0) $ column
-        [ thisMenu
-        , layers
-          [ fmap undefined sheetStream
-          , row
-            [ space (floor $ frac * sheetWidth, 0)
-            , Rectangle (2, systemHeight) (SDL.Color 255 0 0 255)
-            ]
-          ]
-        ]
-      SDL.renderPresent rend
-
-    whileStopped s f = case s of
-      Stopped ss -> fmap Stopped $ f ss
-      Playing ps -> fmap Playing $ do
-        ss <- stop ps
-        ps' <- f ss
-        threadDelay 75000
-        start ps'
-    toggleVolume i s = let
-      ss = getStopState s
-      vol = audioGains ss !! i
-      vol' = if vol == 1 then 0 else 1
-      gains' = updateNth i vol' $ audioGains ss
-      s' = setStopState (ss { audioGains = gains' }) s
-      in do
-        setVolumes gains' $ audioPipe_ static
-        pure s'
-    updateNth i x xs = case splitAt i xs of
-      (ys, zs) -> ys ++ [x] ++ drop 1 zs
-    flipNth i = zipWith ($) $ updateNth i not $ repeat id
-    toggleSheet i = mapStopState $
-      \ss -> ss { sheetShow = flipNth i $ sheetShow ss }
-
-    loop s = do
-      draw s
-      threadDelay 16000 -- ehhh, fix this later
-      eloop s
-    runCommand :: Command -> State -> IO State
-    runCommand cmd s = case cmd of
-      ToggleSheet sp -> let
-        Just i = elemIndex sp $ map fst $ sheetParts_ static
-        in pure $ toggleSheet i s
-      ToggleAudio aud -> let
-        Just i = elemIndex aud $ audioParts_ static
-        in toggleVolume i s
-      ToggleSlow -> whileStopped s $ \ss -> do
-        let newSpeed = if playSpeed ss == 1 then 1.25 else 1
-        seekTo (audioPosn ss) newSpeed $ audioPipe_ static
-        pure $ ss { playSpeed = newSpeed }
-      PlayPause -> case s of
-        Playing ps -> stop  ps >>= pure . Stopped
-        Stopped ss -> start ss >>= pure . Playing
-      MoveLeft -> whileStopped s $ \ss -> do
-        let newPosn = max 0 $ audioPosn ss - 5
-        seekTo newPosn (playSpeed ss) $ audioPipe_ static
-        pure $ ss { audioPosn = newPosn }
-      MoveRight -> whileStopped s $ \ss -> do
-        let newPosn = audioPosn ss + 5
-        seekTo newPosn (playSpeed ss) $ audioPipe_ static
-        pure $ ss { audioPosn = newPosn }
-    eloop s = pollEvent >>= \case
-      Just (SDL.QuitEvent {}) -> quit
-      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
-        -- Let user adjust height, but make width to at least sheetWidth
-        (width, height) <- alloca $ \pw -> alloca $ \ph -> do
-          SDL.getWindowSize (window_ static) pw ph
-          liftA2 (,) (peek pw) (peek ph)
-        SDL.setWindowSize (window_ static) (max sheetWidth width) height
-        eloop s
-      Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> togglePlaying
-      Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> moveLeft
-      Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> moveRight
-      Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> toggleSpeed
-      Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_V) -> toggleVolume 3 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_B) -> toggleVolume 4 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_N) -> toggleVolume 5 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_M) -> toggleVolume 6 s >>= eloop
-      Just (KeyPress SDL.SDL_SCANCODE_A) -> eloop $ toggleSheet 0 s
-      Just (KeyPress SDL.SDL_SCANCODE_S) -> eloop $ toggleSheet 1 s
-      Just (KeyPress SDL.SDL_SCANCODE_D) -> eloop $ toggleSheet 2 s
-      Just (KeyPress SDL.SDL_SCANCODE_F) -> eloop $ toggleSheet 3 s
-      Just (KeyPress SDL.SDL_SCANCODE_G) -> eloop $ toggleSheet 4 s
-      Just (KeyPress SDL.SDL_SCANCODE_H) -> eloop $ toggleSheet 5 s
-      Just (KeyPress SDL.SDL_SCANCODE_J) -> eloop $ toggleSheet 6 s
-      Just (SDL.MouseButtonEvent
-        { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
-        , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
-        , SDL.mouseButtonEventX = mx
-        , SDL.mouseButtonEventY = my
-        }) -> findLabel (fromIntegral mx, fromIntegral my) (menu s) >>= \case
-          Just (act, _) -> runCommand act s >>= eloop
-          Nothing       -> eloop s
-      Just _  -> eloop s
-      Nothing -> loop  s
-      where moveLeft = runCommand MoveLeft s >>= eloop
-            moveRight = runCommand MoveRight s >>= eloop
-            toggleSpeed = runCommand ToggleSlow s >>= eloop
-            togglePlaying = runCommand PlayPause s >>= eloop
-            quit = case s of
-              Playing ps -> stop ps >>= \_ss -> pure ()
-              Stopped _  -> pure ()
-
-    in loop $ Stopped StopState
-      { audioPosn  = 0
-      , playSpeed  = 1
-      , audioGains = map (const 1) $ audioParts_ static
-      , sheetShow  = zipWith const (True : repeat False) $ sheetParts_ static
-      }
-
-data StopState = StopState
-  { audioPosn  :: Double -- seconds
-  , playSpeed  :: Double -- ratio of playback secs to original secs
-  , audioGains :: [Double]
-  , sheetShow  :: [Bool]
-  } deriving (Eq, Ord, Show, Read)
-
-data PlayState = PlayState
-  { startTicks :: Int -- sdl ticks
-  , stopState  :: StopState
-  } deriving (Eq)
-
-data State
-  = Stopped StopState
-  | Playing PlayState
-  deriving (Eq)
-
-getStopState :: State -> StopState
-getStopState (Playing PlayState{ stopState = ss }) = ss
-getStopState (Stopped ss) = ss
-
-setStopState :: StopState -> State -> State
-setStopState ss = \case
-  Playing ps -> Playing ps{ stopState = ss }
-  Stopped _  -> Stopped ss
-
-mapStopState :: (StopState -> StopState) -> State -> State
-mapStopState f s = setStopState (f $ getStopState s) s
-
-pattern KeyPress scan <- SDL.KeyboardEvent
-  { SDL.eventType           = SDL.SDL_KEYDOWN
-  , SDL.keyboardEventRepeat = 0
-  , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
-  }
-
--- | Returns Just an event if there is one currently in the queue.
-pollEvent :: IO (Maybe SDL.Event)
-pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
-  1 -> Just <$> peek pevt
-  _ -> pure Nothing
-
 splitRows' :: Track -> [SDL.Texture] -> [Arrangement a]
 splitRows' trk texs = map f $ splitRows trk texs where
   f snips = column [ Crop rect tex | (tex, rect) <- snips ]
@@ -397,3 +166,223 @@ rowNumber bts pos = case span (< pos) $ rowStarts bts of
     rowStart = last xs
     rowEnd   = head ys
     in (length xs - 1, (pos - rowStart) / (rowEnd - rowStart))
+
+data Command
+  = ToggleSheet SheetPart
+  | ToggleAudio (Maybe Part)
+  | ToggleSlow
+  | PlayPause
+  | MoveLeft
+  | MoveRight
+  deriving (Eq, Ord, Show, Read)
+
+data Volatile = Volatile
+  { _stoppedPosn :: Double -- ^ seconds
+  , _playSpeed   :: Double -- ^ ratio of playback secs to original secs
+  , _audioGains  :: [Double]
+  , _sheetShow   :: [Bool]
+  , _startTicks  :: Maybe Word32 -- ^ sdl ticks, Nothing if stopped
+  } deriving (Eq, Ord, Show, Read)
+
+L.makeLenses ''Volatile
+type App = StateT Volatile IO
+
+main :: IO ()
+main = do
+
+  songs <- getArgs >>= \case
+    []    -> getProgName >>= \pn -> error $ "Usage: "++pn++" dir1 [dir2 ...]"
+    songs -> pure songs
+
+  withLoad songs $ \static -> let
+    rend = renderer_ static
+    getImage = getImage_ static
+
+    isPlaying :: App Bool
+    isPlaying = fmap isJust $ L.use startTicks
+
+    currentPosn :: App Double
+    currentPosn = do
+      sp <- L.use stoppedPosn
+      L.use startTicks >>= \case
+        Nothing -> pure sp
+        Just tks -> do
+          now <- SDL.getTicks
+          let diffSeconds = fromIntegral (now - tks) / 1000
+          pure $ sp + diffSeconds
+
+    start :: App ()
+    start = do
+      liftIO $ playPause $ audioPipe_ static
+      -- Mark the sdl ticks when we started audio
+      SDL.getTicks >>= (startTicks .=) . Just
+
+    stop :: App ()
+    stop = do
+      liftIO $ playPause $ audioPipe_ static
+      currentPosn >>= (stoppedPosn .=)
+      startTicks .= Nothing
+
+    menu :: App (Arrangement Command)
+    menu = get >>= \s -> pure $ row
+      [ Label PlayPause $ Whole $ getImage $ case _startTicks s of
+        Nothing -> "play"
+        Just _  -> "stop"
+      , Label MoveLeft $ Whole $ getImage "left"
+      , Label MoveRight $ Whole $ getImage "right"
+      , Label ToggleSlow $ Whole $ getImage $ case _playSpeed s of
+        1 -> "no_slow"
+        _ -> "slow"
+      , column
+        [ row $ do
+          ((sheet, _), isShown) <- zip (sheetParts_ static) $ _sheetShow s
+          let prefix = if isShown then "" else "no_"
+              filename = case sheet of
+                Notation p -> partToFile p
+                Tab p -> partToFile p ++ "tab"
+          pure $ Label (ToggleSheet sheet) $ Whole $ getImage $ prefix ++ filename
+        , row $ do
+          (apart, gain) <- zip (audioParts_ static) $ _audioGains s
+          let prefix = if gain /= 0 then "" else "no_"
+              filename = maybe "band" partToFile apart
+          pure $ Label (ToggleAudio apart) $ Whole $ getImage $ prefix ++ filename
+        ]
+      ] where partToFile = map toLower . drop 4 . show
+
+    draw :: App ()
+    draw = do
+      pn <- currentPosn
+      s <- get
+      let (rowN, frac) = rowNumber (beats_ static) pn
+          sheetsToDraw = map snd $ filter fst
+            $ zip (_sheetShow s) $ sheetParts_ static
+          sheetStream :: Arrangement ()
+          sheetStream = column $ case sheetsToDraw of
+            [sheet] -> drop rowN $ snd sheet
+            _ -> intercalate [Whole $ getImage "divider"] $
+              transpose $ map (drop rowN . snd) sheetsToDraw
+      thisMenu <- menu
+      liftIO $ do
+        systemHeight <- fmap sum $ forM sheetsToDraw $ \sheet ->
+          fmap snd $ getDims $ head $ snd sheet
+        zero $ SDL.setRenderDrawColor rend 0 0 0 255
+        zero $ SDL.renderClear rend
+        render rend (0, 0) $ column
+          [ thisMenu
+          , layers
+            [ fmap undefined sheetStream
+            , row
+              [ space (floor $ frac * sheetWidth, 0)
+              , Rectangle (2, systemHeight) (SDL.Color 255 0 0 255)
+              ]
+            ]
+          ]
+        SDL.renderPresent rend
+
+    whileStopped :: App () -> App ()
+    whileStopped f = isPlaying >>= \case
+      True -> stop >> f >> liftIO (threadDelay 75000) >> start
+      False -> f
+
+    toggleVolume :: Int -> App ()
+    toggleVolume i = do
+      audioGains . L.ix i %= \case { 1 -> 0; _ -> 1 }
+      gains' <- L.use audioGains
+      liftIO $ setVolumes gains' $ audioPipe_ static
+
+    toggleSheet :: Int -> App ()
+    toggleSheet i = sheetShow . L.ix i %= not
+
+    loop :: App ()
+    loop = draw >> liftIO (threadDelay 16000) >> eloop
+
+    updateSeek :: App ()
+    updateSeek = do
+      p <- L.use stoppedPosn
+      s <- L.use playSpeed
+      liftIO $ seekTo p s $ audioPipe_ static
+
+    runCommand :: Command -> App ()
+    runCommand cmd = case cmd of
+      ToggleSheet sp -> let
+        Just i = elemIndex sp $ map fst $ sheetParts_ static
+        in toggleSheet i
+      ToggleAudio aud -> let
+        Just i = elemIndex aud $ audioParts_ static
+        in toggleVolume i
+      ToggleSlow -> whileStopped $ do
+        playSpeed %= \case { 1 -> 1.25; _ -> 1 }
+        updateSeek
+      PlayPause -> isPlaying >>= \b -> if b then stop else start
+      MoveLeft -> whileStopped $ do
+        stoppedPosn %= \pn -> max 0 $ pn - 5
+        updateSeek
+      MoveRight -> whileStopped $ do
+        stoppedPosn += 5
+        updateSeek
+
+    eloop :: App ()
+    eloop = liftIO pollEvent >>= \case
+      Just (SDL.QuitEvent {}) -> quit
+      Just (SDL.WindowEvent { SDL.windowEventEvent = SDL.SDL_WINDOWEVENT_RESIZED }) -> do
+        -- Let user adjust height, but make width to at least sheetWidth
+        (width, height) <- liftIO $ alloca $ \pw -> alloca $ \ph -> do
+          SDL.getWindowSize (window_ static) pw ph
+          liftA2 (,) (peek pw) (peek ph)
+        SDL.setWindowSize (window_ static) (max sheetWidth width) height
+        eloop
+      Just (KeyPress SDL.SDL_SCANCODE_SPACE) -> togglePlaying
+      Just (KeyPress SDL.SDL_SCANCODE_LEFT) -> moveLeft
+      Just (KeyPress SDL.SDL_SCANCODE_RIGHT) -> moveRight
+      Just (KeyPress SDL.SDL_SCANCODE_LSHIFT) -> toggleSpeed
+      Just (KeyPress SDL.SDL_SCANCODE_Z) -> toggleVolume 0 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_X) -> toggleVolume 1 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_C) -> toggleVolume 2 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_V) -> toggleVolume 3 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_B) -> toggleVolume 4 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_N) -> toggleVolume 5 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_M) -> toggleVolume 6 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_A) -> toggleSheet 0 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_S) -> toggleSheet 1 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_D) -> toggleSheet 2 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_F) -> toggleSheet 3 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_G) -> toggleSheet 4 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_H) -> toggleSheet 5 >> eloop
+      Just (KeyPress SDL.SDL_SCANCODE_J) -> toggleSheet 6 >> eloop
+      Just (SDL.MouseButtonEvent
+        { SDL.eventType = SDL.SDL_MOUSEBUTTONDOWN
+        , SDL.mouseButtonEventButton = SDL.SDL_BUTTON_LEFT
+        , SDL.mouseButtonEventX = mx
+        , SDL.mouseButtonEventY = my
+        }) -> menu >>= liftIO . findLabel (fromIntegral mx, fromIntegral my) >>= \case
+          Just (act, _) -> runCommand act >> eloop
+          Nothing       -> eloop
+      Just _  -> eloop
+      Nothing -> loop
+      where moveLeft = runCommand MoveLeft >> eloop
+            moveRight = runCommand MoveRight >> eloop
+            toggleSpeed = runCommand ToggleSlow >> eloop
+            togglePlaying = runCommand PlayPause >> eloop
+            quit = isPlaying >>= \b -> when b stop
+
+    initialVolatile = Volatile
+      { _stoppedPosn = 0
+      , _playSpeed   = 1
+      , _audioGains  = map (const 1) $ audioParts_ static
+      , _sheetShow   = zipWith const (True : repeat False) $ sheetParts_ static
+      , _startTicks  = Nothing
+      }
+
+    in evalStateT loop initialVolatile
+
+pattern KeyPress scan <- SDL.KeyboardEvent
+  { SDL.eventType           = SDL.SDL_KEYDOWN
+  , SDL.keyboardEventRepeat = 0
+  , SDL.keyboardEventKeysym = SDL.Keysym { SDL.keysymScancode = scan }
+  }
+
+-- | Returns Just an event if there is one currently in the queue.
+pollEvent :: IO (Maybe SDL.Event)
+pollEvent = alloca $ \pevt -> SDL.pollEvent pevt >>= \case
+  1 -> Just <$> peek pevt
+  _ -> pure Nothing

@@ -43,6 +43,7 @@ executable jelly
     , conduit
     , transformers
     , resourcet
+    , lens
   if flag(LocalResources)
     build-depends: FindBin
     cpp-options: -DLOCALRESOURCES
