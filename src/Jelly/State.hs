@@ -1,4 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 module Jelly.State where
 
@@ -33,8 +32,31 @@ data Volatile = Volatile
 
 type App = RWST Static () Volatile IO
 
-L.makeLenses ''Static
-L.makeLenses ''Volatile
+window :: L.Lens' Static SDL.Window
+window = L.lens _window (\s x -> s { _window = x })
+renderer :: L.Lens' Static SDL.Renderer
+renderer = L.lens _renderer (\s x -> s { _renderer = x })
+audioPipe :: L.Lens' Static AudioPipe
+audioPipe = L.lens _audioPipe (\s x -> s { _audioPipe = x })
+audioParts :: L.Lens' Static [Maybe Part]
+audioParts = L.lens _audioParts (\s x -> s { _audioParts = x })
+sheetParts :: L.Lens' Static [(SheetPart, [Arrangement ()])]
+sheetParts = L.lens _sheetParts (\s x -> s { _sheetParts = x })
+beats :: L.Lens' Static [Beat]
+beats = L.lens _beats (\s x -> s { _beats = x })
+interface :: L.Lens' Static (String -> SDL.Texture)
+interface = L.lens _interface (\s x -> s { _interface = x })
+
+stoppedPosn :: L.Lens' Volatile Double
+stoppedPosn = L.lens _stoppedPosn (\s x -> s { _stoppedPosn = x })
+playSpeed :: L.Lens' Volatile Double
+playSpeed = L.lens _playSpeed (\s x -> s { _playSpeed = x })
+audioGains :: L.Lens' Volatile [Double]
+audioGains = L.lens _audioGains (\s x -> s { _audioGains = x })
+sheetShow :: L.Lens' Volatile [Bool]
+sheetShow = L.lens _sheetShow (\s x -> s { _sheetShow = x })
+startTicks :: L.Lens' Volatile (Maybe Word32)
+startTicks = L.lens _startTicks (\s x -> s { _startTicks = x })
 
 initialVolatile :: Static -> Volatile
 initialVolatile static = Volatile
