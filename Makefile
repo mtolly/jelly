@@ -17,22 +17,17 @@ mac:
 	dylibbundler -cd -of -b -x mac/jelly -d mac/libs -p "@executable_path/libs/"
 	cp README.md mac/
 
-.PHONY: mingw-deps
-mingw-deps:
-	cd mingw-deps && ./fetch.sh
-	cabal install c2hs
-
 .PHONY: mingw
 mingw:
-	cabal install Cabal
-	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal install --only-dependencies --extra-lib-dirs="`pwd`/mingw-deps/lib" --extra-include-dirs="`pwd`/mingw-deps/include" --allow-newer=sdl2 --flags LocalResources
-	PATH="`pwd`/mingw-deps/bin:$$PATH" cabal configure --flags LocalResources
-	cabal build
+	winbox init
+	winbox install sdl2 sdl2-image openal libsndfile librubberband
+	winbox cabal install --only-dependencies --allow-newer=sdl2 --flags LocalResources
+	winbox cabal configure --flags LocalResources
+	winbox cabal build
 	cp dist/build/jelly/jelly.exe mingw/jelly.exe
 	strip mingw/jelly.exe
-	rm -rf mingw/*.dll
-	cp mingw-deps/bin/*.dll mingw/
-	rm -rf mingw/resources
-	cp -r resources mingw/resources
+	cp .winbox/bin/*.dll mingw/
 	cp /mingw/bin/libstdc++-6.dll mingw/
+	cp /mingw/bin/libgcc_s_dw2-1.dll mingw/
+	cp -r resources mingw/resources
 	cp README.md mingw/

@@ -51,15 +51,20 @@ Specifically it must be after
 
   1. Install 32-bit [MinGW and MSYS](http://www.mingw.org/).
 
-  3. Install the [Haskell Platform][] (or GHC, Cabal, Alex, and Happy).
+  2. Install the [Haskell Platform][] (or GHC, Cabal, Alex, and Happy).
 
-  2. Run `make mingw-deps`, then `make mingw` to generate the complete
+  3. Install a recent version of `cabal-install` which supports `--allow-newer`.
+
+  4. Install `c2hs`.
+
+  5. Download [`winbox`](https://github.com/mtolly/winbox) and place in your `PATH`.
+
+  6. Run `make mingw` to generate the complete
     distribution package in the `mingw` folder. This will download the
     needed MinGW packages, download and compile/install all the C
     libraries, download and install Python if you don't have it already
     (needed for compiling libsndfile), and finally install all Haskell
     dependencies, so `cabal sandbox init` beforehand if you want it
-    sandboxed. The C libraries will all be stored in the local
-    `mingw-deps/` folder.
+    sandboxed.
 
 [Haskell Platform]: https://www.haskell.org/platform/
