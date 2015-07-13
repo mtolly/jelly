@@ -75,7 +75,7 @@ data AudioPipe = AudioPipe
   , sources_ :: [(AL.Source, AL.Source)]
   , filler_  :: IORef Stoppable
   , playing_ :: IORef Bool
-  , rewire_  :: (Num a, V.Storable a) =>
+  , rewire_  :: forall a. (Num a, V.Storable a) =>
       [(V.Vector a, V.Vector a)] -> [(V.Vector a, V.Vector a)]
   , lenmax_  :: Double
   , lenmin_  :: Double

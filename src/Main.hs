@@ -26,14 +26,10 @@ import qualified Graphics.UI.SDL.Image      as Image
 import           System.Environment         (getArgs, getProgName)
 import           System.FilePath            ((<.>), (</>))
 
-#ifndef LOCALRESOURCES
-import           Paths_jelly                (getDataFileName)
-#else
 import           System.Environment.FindBin (getProgPath)
 
 getDataFileName :: FilePath -> IO FilePath
 getDataFileName fp = (</> fp) <$> getProgPath
-#endif
 
 withLoad :: [FilePath] -> (Static -> IO a) -> IO a
 withLoad songs act
