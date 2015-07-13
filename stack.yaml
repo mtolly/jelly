@@ -6,7 +6,7 @@ packages:
     commit: 090c08ab61a237c721a307f5cf9fd33f3988b82e
   extra-dep: true
 extra-deps:
-- OpenAL-1.7.0.0
+- al-0.1.4
 - hsndfile-0.7.1
 - hsndfile-vector-0.5.2
 - rubberband-0.1.0.2

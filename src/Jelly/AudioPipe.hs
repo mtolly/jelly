@@ -34,11 +34,12 @@ import           Data.IORef                       (IORef, newIORef, readIORef,
 import           Data.List                        (elemIndex, foldl1', nub)
 import qualified Data.Set                         as Set
 import qualified Data.Vector.Storable             as V
-import           Foreign                          (sizeOf)
+import           Foreign
+import           Foreign.C
 import qualified Sound.File.Sndfile               as Snd
 import qualified Sound.File.Sndfile.Buffer.Vector as SndV
-import           Sound.OpenAL                     (($=))
-import qualified Sound.OpenAL                     as AL
+import           Sound.AL
+import           Sound.ALC
 import qualified Sound.RubberBand                 as RB
 
 type Stoppable = (MVar (), MVar ())
@@ -70,9 +71,12 @@ markStopped (_, v2) = do
   _ <- tryPutMVar v2 ()
   pure ()
 
+type ALsource = ALuint
+type ALbuffer = ALuint
+
 data AudioPipe = AudioPipe
   { handles_ :: [Snd.Handle]
-  , sources_ :: [(AL.Source, AL.Source)]
+  , sources_ :: [(ALsource, ALsource)]
   , filler_  :: IORef Stoppable
   , playing_ :: IORef Bool
   , rewire_  :: forall a. (Num a, V.Storable a) =>
@@ -84,6 +88,11 @@ data AudioPipe = AudioPipe
 
 type Input = ([FilePath], [FilePath])
 
+genSources :: Int -> IO [ALsource]
+genSources n = allocaArray n $ \p -> do
+  alGenSources (fromIntegral n) p
+  peekArray n p
+
 -- | Makes a new pipe, and starts loading data from position zero at 100% speed.
 makePipe
   :: Double -- ^ In seconds, max length of audio data loaded into the queues
@@ -91,10 +100,10 @@ makePipe
   -> [Input]
   -> IO AudioPipe
 makePipe lenmax lenmin ins = do
-  srcsL <- AL.genObjectNames $ length ins
-  srcsR <- AL.genObjectNames $ length ins
-  forM_ srcsL $ \src -> AL.sourcePosition src $= AL.Vertex3 (-1) 0 0
-  forM_ srcsR $ \src -> AL.sourcePosition src $= AL.Vertex3 1    0 0
+  srcsL <- genSources $ length ins
+  srcsR <- genSources $ length ins
+  forM_ srcsL $ \src -> alSource3f src al_POSITION (-1) 0 0
+  forM_ srcsR $ \src -> alSource3f src al_POSITION 1    0 0
   let allFiles = nub $ ins >>= uncurry (++)
   hnds <- forM allFiles $ \f -> Snd.openFile f Snd.ReadMode Snd.defaultInfo
   let fileIndex :: FilePath -> Int
@@ -133,7 +142,7 @@ closePipe pipe = do
   readIORef (filler_ pipe) >>= stop
   writeIORef (playing_ pipe) False
   forM_ (handles_ pipe) Snd.hClose
-  forM_ (sources_ pipe) $ \(srcL, srcR) -> AL.deleteObjectNames [srcL, srcR]
+  forM_ (sources_ pipe) $ \(srcL, srcR) -> withArrayLen' [srcL, srcR] alDeleteSources
 
 withPipe :: Double -> Double -> [Input] -> (AudioPipe -> IO a) -> IO a
 withPipe lenmax lenmin ins = withALContext
@@ -141,17 +150,18 @@ withPipe lenmax lenmin ins = withALContext
 
 withALContext :: IO a -> IO a
 withALContext act = bracket
-  — AL.openDevice Nothing
-    >>= maybe (error "couldn't open audio device") pure
-  — AL.closeDevice
+  — do throwIfNull "couldn't open audio device" $ alcOpenDevice nullPtr
+  — alcCloseDevice
   — \dev -> bracket
-    — AL.createContext dev []
-      >>= maybe (error "couldn't create audio context") pure
-    — AL.destroyContext
+    — do throwIfNull "couldn't create audio context" $ alcCreateContext dev nullPtr
+    — alcDestroyContext
     — \ctxt -> bracket_
-      — AL.currentContext $= Just ctxt
-      — AL.currentContext $= Nothing
+      — alcMakeContextCurrent ctxt
+      — alcMakeContextCurrent nullPtr
       — act
+
+withArrayLen' :: (Storable a, Num n, MonadIO m) => [a] -> (n -> Ptr a -> IO b) -> m b
+withArrayLen' xs f = liftIO $ withArrayLen xs $ \n p -> f (fromIntegral n) p
 
 -- | If paused, seeks to the new position and begins queueing data.
 -- If playing, pauses, seeks to the new position, and plays once data is queued.
@@ -178,32 +188,37 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
         numOut = length sourcesFlat
         sourcesFlat = breakPairs $ sources_ pipe
     _ <- forkIO $ source $$ do
-      let loop :: Int -> Set.Set AL.Buffer -> C.Sink [V.Vector Int16] IO ()
+      let loop :: Int -> Set.Set ALbuffer -> C.Sink [V.Vector Int16] IO ()
           loop q bufs = liftIO (stopRequested s) >>= \case
             True -> liftIO $ do
-              AL.stop sourcesFlat
+              withArrayLen' sourcesFlat alSourceStopv
               forM_ sourcesFlat $ \src ->
-                AL.buffer src $= Nothing
-              AL.rewind sourcesFlat
+                alSourcei src al_BUFFER al_NONE
+              withArrayLen' sourcesFlat alSourceRewindv
               writeIORef (full_ pipe) True
               fix $ \loopCleanup -> do
-                _ <- AL.get AL.alErrors
-                AL.deleteObjectNames $ Set.toList bufs
-                AL.get AL.alErrors >>= \case
-                  [] -> markStopped s
-                  _  -> shortWait >> loopCleanup
+                _ <- alGetError
+                withArrayLen' (Set.toList bufs) alDeleteBuffers
+                alGetError >>= \err -> if err == al_NO_ERROR
+                  then markStopped s
+                  else shortWait >> loopCleanup
             False -> do
-              canRemove <- liftIO $ fmap minimum $
-                mapM (AL.get . AL.buffersProcessed) sourcesFlat
-              bufsRemoved <- liftIO $ forM sourcesFlat $ \src ->
-                AL.unqueueBuffers src canRemove
+              canRemove <- liftIO $ fmap minimum $ forM sourcesFlat $ \src -> do
+                alloca $ \p -> do
+                  alGetSourcei src al_BUFFERS_PROCESSED p
+                  peek p
+              bufsRemoved <- liftIO $ forM sourcesFlat $ \src -> do
+                allocaArray (fromIntegral canRemove) $ \p -> do
+                  alSourceUnqueueBuffers src canRemove p
+                  peekArray (fromIntegral canRemove) p
               p <- liftIO $ fmap sum $ forM (head bufsRemoved) $ \buf -> do
-                AL.BufferData (AL.MemoryRegion _ size) _ _
-                  <- AL.get $ AL.bufferData buf
+                size <- alloca $ \p -> do
+                  alGetBufferi buf al_SIZE p
+                  peek p
                 pure $ fromIntegral size `quot` 2
               let q' = q - p
                   bufs' = Set.difference bufs $ Set.fromList $ concat bufsRemoved
-              liftIO $ AL.deleteObjectNames $ concat bufsRemoved
+              withArrayLen' (concat bufsRemoved) alDeleteBuffers
               if q' >= floor (44100 * lenmax_ pipe)
                 then shortWait >> loop q' bufs'
                 else C.await >>= \case
@@ -215,7 +230,7 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
                     let q'' = q' + V.length (head vs)
                         bufs'' = Set.union bufs' $ Set.fromList bufsNew
                     liftIO $ forM_ (zip sourcesFlat bufsNew) $ \(src, buf) ->
-                      AL.queueBuffers src [buf]
+                      withArrayLen' [buf] $ alSourceQueueBuffers src
                     liftIO $ when (q'' >= floor (44100 * lenmin_ pipe))
                       $ writeIORef (full_ pipe) True
                     loop q'' bufs''
@@ -223,13 +238,12 @@ seekTo pos speed pipe = readIORef (playing_ pipe) >>= \case
     writeIORef (filler_ pipe) s
 
 -- | Converts a vector of samples to an OpenAL buffer.
-makeBuffer :: V.Vector Int16 -> IO AL.Buffer
+makeBuffer :: V.Vector Int16 -> IO ALbuffer
 makeBuffer v = do
-  buf <- liftIO AL.genObjectName
+  buf <- alloca $ \p -> alGenBuffers 1 p >> peek p
   V.unsafeWith v $ \p -> do
-    let mem = AL.MemoryRegion p $ fromIntegral vsize
-        vsize = V.length v * sizeOf (v V.! 0)
-    AL.bufferData buf $= AL.BufferData mem AL.Mono16 44100
+    let vsize = fromIntegral $ V.length v * sizeOf (v V.! 0)
+    alBufferData buf al_FORMAT_MONO16 p vsize 44100
   pure buf
 
 -- | Translates samples from floats (Rubber Band) to 16-bit ints (OpenAL).
@@ -300,12 +314,12 @@ playPause :: AudioPipe -> IO ()
 playPause pipe = readIORef (playing_ pipe) >>= \case
   True -> do
     writeIORef (playing_ pipe) False
-    AL.pause sourcesFlat
+    withArrayLen' sourcesFlat alSourcePausev
   False -> fix $ \loop -> readIORef (full_ pipe) >>= \case
     False -> shortWait >> loop
     True -> do
       writeIORef (playing_ pipe) True
-      AL.play sourcesFlat
+      withArrayLen' sourcesFlat alSourcePlayv
   where sourcesFlat = breakPairs $ sources_ pipe
 
 breakPairs :: [(a, a)] -> [a]
@@ -319,8 +333,8 @@ joinPairs [_] = error "joinPairs: odd number of elements"
 -- | Sets volumes of the audio sources. Doesn't care whether playing/paused.
 setVolumes :: [Double] -> AudioPipe -> IO ()
 setVolumes vols pipe = forM_ (zip vols $ sources_ pipe) $ \(vol, (srcL, srcR)) -> do
-  AL.sourceGain srcL $= realToFrac vol
-  AL.sourceGain srcR $= realToFrac vol
+  alSourcef srcL al_GAIN $ realToFrac vol
+  alSourcef srcR al_GAIN $ realToFrac vol
 
 -- | Given a vector with interleaved samples, like @[L0, R0, L1, R1, ...]@,
 -- converts it into @[[L0, L1, ...], [R0, R1, ...]]@.

@@ -31,7 +31,7 @@ executable jelly
     , containers
     , directory
     , filepath
-    , OpenAL
+    , al
     , hsndfile
     , hsndfile-vector
     , vector
