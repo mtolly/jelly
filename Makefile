@@ -6,10 +6,8 @@ build:
 
 .PHONY: mac
 mac:
-	cabal install --only-dependencies --allow-newer=sdl2 --flags LocalResources
-	cabal configure --flags LocalResources
-	cabal build
-	cp dist/build/jelly/jelly mac/jelly
+	stack build
+	cp .stack-work/install/*/*/*/bin/jelly mac/jelly
 	strip mac/jelly
 	rm -rf mac/resources
 	cp -r resources mac/resources
